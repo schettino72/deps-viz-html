@@ -51,7 +51,7 @@ def detect_cycles(results):
 
 
 def format_html(results, cycle_edges):
-    """Format results as interactive HTML visualization using D3.js"""
+    """Format results as interactive HTML visualization"""
     cycle_edges_list = [[src, dst] for src, dst in cycle_edges]
 
     nodes = []
@@ -73,6 +73,7 @@ def format_html(results, cycle_edges):
     <meta charset="utf-8">
     <title>Import Dependencies</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -84,16 +85,16 @@ def format_html(results, cycle_edges):
             border-right: 1px solid #ddd;
             overflow-y: auto;
         }
-        #graph { flex: 1; }
+        #graph { flex: 1; overflow: hidden; }
         svg { width: 100%; height: 100%; }
         .node { cursor: pointer; }
-        .node circle { stroke: #fff; stroke-width: 2px; }
+        .node rect { stroke: #333; stroke-width: 1px; }
         .node text { font-size: 11px; pointer-events: none; }
-        .link { fill: none; stroke-opacity: 0.6; }
-        .link.cycle { stroke: #e74c3c !important; stroke-width: 2.5px; }
+        .link { fill: none; stroke: #999; stroke-width: 1.5px; }
+        .link.cycle { stroke: #e74c3c; stroke-width: 2.5px; }
         .dimmed { opacity: 0.15; }
         h3 { margin-bottom: 10px; color: #333; font-size: 14px; }
-        #search {
+        #search, #layout-select {
             width: 100%;
             padding: 8px;
             margin-bottom: 15px;
@@ -146,6 +147,14 @@ def format_html(results, cycle_edges):
 <body>
     <div id="container">
         <div id="sidebar">
+            <div class="filter-section">
+                <h3>Layout</h3>
+                <select id="layout-select">
+                    <option value="dagre-lr">Hierarchical (LR)</option>
+                    <option value="dagre-tb">Hierarchical (TB)</option>
+                    <option value="force">Force-directed</option>
+                </select>
+            </div>
             <h3>Search</h3>
             <input type="text" id="search" placeholder="Filter modules...">
             <div class="filter-section">
@@ -182,25 +191,28 @@ def format_html(results, cycle_edges):
     const cycleSet = new Set(data.cycles.map(c => c[0] + '|' + c[1]));
 
     // Setup SVG
-    const container = document.getElementById('graph');
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+    const graphDiv = document.getElementById('graph');
+    const width = graphDiv.clientWidth;
+    const height = graphDiv.clientHeight;
 
     const svg = d3.select('#graph')
         .append('svg')
-        .attr('viewBox', [0, 0, width, height]);
+        .attr('width', width)
+        .attr('height', height);
 
     // Add zoom
     const g = svg.append('g');
-    svg.call(d3.zoom()
+    const zoom = d3.zoom()
         .scaleExtent([0.1, 4])
-        .on('zoom', (event) => g.attr('transform', event.transform)));
+        .on('zoom', (event) => g.attr('transform', event.transform));
+    svg.call(zoom);
 
-    // Arrow marker
-    svg.append('defs').append('marker')
+    // Arrow markers
+    const defs = svg.append('defs');
+    defs.append('marker')
         .attr('id', 'arrow')
         .attr('viewBox', '0 -5 10 10')
-        .attr('refX', 20)
+        .attr('refX', 10)
         .attr('refY', 0)
         .attr('markerWidth', 6)
         .attr('markerHeight', 6)
@@ -209,10 +221,10 @@ def format_html(results, cycle_edges):
         .attr('fill', '#999')
         .attr('d', 'M0,-5L10,0L0,5');
 
-    svg.append('defs').append('marker')
+    defs.append('marker')
         .attr('id', 'arrow-cycle')
         .attr('viewBox', '0 -5 10 10')
-        .attr('refX', 20)
+        .attr('refX', 10)
         .attr('refY', 0)
         .attr('markerWidth', 6)
         .attr('markerHeight', 6)
@@ -221,95 +233,179 @@ def format_html(results, cycle_edges):
         .attr('fill', '#e74c3c')
         .attr('d', 'M0,-5L10,0L0,5');
 
-    // Create simulation
-    const simulation = d3.forceSimulation(data.nodes)
-        .force('link', d3.forceLink(data.links).id(d => d.id).distance(120))
-        .force('charge', d3.forceManyBody().strength(-400))
-        .force('center', d3.forceCenter(width / 2, height / 2))
-        .force('collision', d3.forceCollide().radius(40));
+    // Create node data with positions
+    let nodes = data.nodes.map(n => ({...n}));
+    let links = data.links.map(l => ({source: l.source, target: l.target}));
 
-    // Draw links
-    const link = g.append('g')
-        .selectAll('line')
-        .data(data.links)
-        .join('line')
-        .attr('class', d => {
-            const key = d.source.id + '|' + d.target.id;
-            return cycleSet.has(key) ? 'link cycle' : 'link';
-        })
-        .attr('stroke', d => {
-            const key = (d.source.id || d.source) + '|' + (d.target.id || d.target);
-            return cycleSet.has(key) ? '#e74c3c' : '#999';
-        })
-        .attr('stroke-width', d => {
-            const key = (d.source.id || d.source) + '|' + (d.target.id || d.target);
-            return cycleSet.has(key) ? 2.5 : 1.5;
-        })
-        .attr('marker-end', d => {
-            const key = (d.source.id || d.source) + '|' + (d.target.id || d.target);
-            return cycleSet.has(key) ? 'url(#arrow-cycle)' : 'url(#arrow)';
+    // Create link elements
+    const linkGroup = g.append('g').attr('class', 'links');
+    const nodeGroup = g.append('g').attr('class', 'nodes');
+
+    let link, node, simulation;
+
+    function getNodeWidth(label) {
+        return Math.max(60, label.length * 7 + 16);
+    }
+
+    function dagreLayout(rankdir) {
+        // Stop any running simulation
+        if (simulation) {
+            simulation.stop();
+            simulation = null;
+        }
+
+        // Create dagre graph
+        const dagreGraph = new dagre.graphlib.Graph();
+        dagreGraph.setGraph({ rankdir: rankdir, nodesep: 30, ranksep: 80, marginx: 20, marginy: 20 });
+        dagreGraph.setDefaultEdgeLabel(() => ({}));
+
+        // Add nodes
+        nodes.forEach(n => {
+            const label = n.id.split('.').pop();
+            dagreGraph.setNode(n.id, { label: label, width: getNodeWidth(label), height: 30 });
         });
 
-    // Draw nodes
-    const node = g.append('g')
-        .selectAll('.node')
-        .data(data.nodes)
-        .join('g')
-        .attr('class', 'node')
-        .call(d3.drag()
-            .on('start', dragstarted)
-            .on('drag', dragged)
-            .on('end', dragended));
+        // Add edges
+        links.forEach(l => {
+            const src = typeof l.source === 'object' ? l.source.id : l.source;
+            const tgt = typeof l.target === 'object' ? l.target.id : l.target;
+            dagreGraph.setEdge(src, tgt);
+        });
 
-    node.append('circle')
-        .attr('r', 8)
-        .attr('fill', d => color(d.package));
+        // Run layout
+        dagre.layout(dagreGraph);
 
-    node.append('text')
-        .attr('dx', 12)
-        .attr('dy', 4)
-        .text(d => d.id.split('.').pop());
+        // Update node positions
+        nodes.forEach(n => {
+            const dagreNode = dagreGraph.node(n.id);
+            n.x = dagreNode.x;
+            n.y = dagreNode.y;
+            n.width = dagreNode.width;
+            n.height = dagreNode.height;
+        });
 
-    // Tick function
-    simulation.on('tick', () => {
-        link
-            .attr('x1', d => d.source.x)
-            .attr('y1', d => d.source.y)
-            .attr('x2', d => d.target.x)
-            .attr('y2', d => d.target.y);
-        node.attr('transform', d => `translate(${d.x},${d.y})`);
-    });
+        // Reset links to use IDs
+        links = data.links.map(l => ({source: l.source, target: l.target}));
 
-    // Drag functions
-    function dragstarted(event) {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        event.subject.fx = event.subject.x;
-        event.subject.fy = event.subject.y;
-    }
-    function dragged(event) {
-        event.subject.fx = event.x;
-        event.subject.fy = event.y;
-    }
-    function dragended(event) {
-        if (!event.active) simulation.alphaTarget(0);
-        event.subject.fx = null;
-        event.subject.fy = null;
+        renderGraph();
+        centerGraph();
     }
 
-    // Node click - highlight connections
-    let selectedNode = null;
-    node.on('click', (event, d) => {
-        event.stopPropagation();
-        selectedNode = d;
+    function forceLayout() {
+        // Reset links
+        links = data.links.map(l => ({source: l.source, target: l.target}));
 
-        const imports = data.links.filter(l => l.source.id === d.id).map(l => l.target.id);
-        const importedBy = data.links.filter(l => l.target.id === d.id).map(l => l.source.id);
+        // Set default sizes
+        nodes.forEach(n => {
+            const label = n.id.split('.').pop();
+            n.width = getNodeWidth(label);
+            n.height = 30;
+        });
+
+        renderGraph();
+
+        // Create simulation
+        simulation = d3.forceSimulation(nodes)
+            .force('link', d3.forceLink(links).id(d => d.id).distance(150))
+            .force('charge', d3.forceManyBody().strength(-500))
+            .force('center', d3.forceCenter(width / 2, height / 2))
+            .force('collision', d3.forceCollide().radius(50))
+            .on('tick', () => {
+                link.attr('d', d => {
+                    const sx = d.source.x, sy = d.source.y;
+                    const tx = d.target.x, ty = d.target.y;
+                    return `M${sx},${sy}L${tx},${ty}`;
+                });
+                node.attr('transform', d => `translate(${d.x - d.width/2},${d.y - d.height/2})`);
+            });
+    }
+
+    function renderGraph() {
+        // Clear existing elements
+        linkGroup.selectAll('*').remove();
+        nodeGroup.selectAll('*').remove();
+
+        // Create node map for link lookups
+        const nodeMap = {};
+        nodes.forEach(n => nodeMap[n.id] = n);
+
+        // Draw links
+        link = linkGroup.selectAll('path')
+            .data(links)
+            .join('path')
+            .attr('class', d => {
+                const src = typeof d.source === 'object' ? d.source.id : d.source;
+                const tgt = typeof d.target === 'object' ? d.target.id : d.target;
+                return cycleSet.has(src + '|' + tgt) ? 'link cycle' : 'link';
+            })
+            .attr('marker-end', d => {
+                const src = typeof d.source === 'object' ? d.source.id : d.source;
+                const tgt = typeof d.target === 'object' ? d.target.id : d.target;
+                return cycleSet.has(src + '|' + tgt) ? 'url(#arrow-cycle)' : 'url(#arrow)';
+            })
+            .attr('d', d => {
+                const src = typeof d.source === 'object' ? d.source : nodeMap[d.source];
+                const tgt = typeof d.target === 'object' ? d.target : nodeMap[d.target];
+                if (!src || !tgt) return '';
+                return `M${src.x},${src.y}L${tgt.x},${tgt.y}`;
+            });
+
+        // Draw nodes
+        node = nodeGroup.selectAll('g')
+            .data(nodes)
+            .join('g')
+            .attr('class', 'node')
+            .attr('transform', d => `translate(${d.x - d.width/2},${d.y - d.height/2})`);
+
+        node.append('rect')
+            .attr('width', d => d.width)
+            .attr('height', d => d.height)
+            .attr('rx', 4)
+            .attr('ry', 4)
+            .attr('fill', d => color(d.package));
+
+        node.append('text')
+            .attr('x', d => d.width / 2)
+            .attr('y', d => d.height / 2 + 4)
+            .attr('text-anchor', 'middle')
+            .text(d => d.id.split('.').pop());
+
+        // Node click handler
+        node.on('click', function(event, d) {
+            event.stopPropagation();
+            highlightNode(d);
+        });
+    }
+
+    function centerGraph() {
+        const bounds = g.node().getBBox();
+        const fullWidth = bounds.width;
+        const fullHeight = bounds.height;
+        const midX = bounds.x + fullWidth / 2;
+        const midY = bounds.y + fullHeight / 2;
+
+        const scale = Math.min(0.9 * width / fullWidth, 0.9 * height / fullHeight, 1);
+        const translateX = width / 2 - midX * scale;
+        const translateY = height / 2 - midY * scale;
+
+        svg.transition().duration(500).call(
+            zoom.transform,
+            d3.zoomIdentity.translate(translateX, translateY).scale(scale)
+        );
+    }
+
+    function highlightNode(d) {
+        const imports = data.links.filter(l => l.source === d.id).map(l => l.target);
+        const importedBy = data.links.filter(l => l.target === d.id).map(l => l.source);
         const connected = new Set([d.id, ...imports, ...importedBy]);
 
         node.classed('dimmed', n => !connected.has(n.id));
-        link.classed('dimmed', l => l.source.id !== d.id && l.target.id !== d.id);
+        link.classed('dimmed', l => {
+            const src = typeof l.source === 'object' ? l.source.id : l.source;
+            const tgt = typeof l.target === 'object' ? l.target.id : l.target;
+            return src !== d.id && tgt !== d.id;
+        });
 
-        // Update info panel
         document.getElementById('info').innerHTML = `
             <h4>${d.id}</h4>
             <div class="info-section">
@@ -324,23 +420,35 @@ def format_html(results, cycle_edges):
                 <ul>${importedBy.map(i => '<li>' + i + '</li>').join('') || '<li>None</li>'}</ul>
             </div>
         `;
+    }
+
+    function resetHighlight() {
+        node.classed('dimmed', false);
+        link.classed('dimmed', false);
+        document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
+    }
+
+    // Layout selector
+    document.getElementById('layout-select').addEventListener('change', function() {
+        const layout = this.value;
+        if (layout === 'dagre-lr') {
+            dagreLayout('LR');
+        } else if (layout === 'dagre-tb') {
+            dagreLayout('TB');
+        } else {
+            forceLayout();
+        }
     });
 
     // Click background to reset
     svg.on('click', resetHighlight);
+
     document.getElementById('reset-btn').onclick = () => {
         resetHighlight();
         document.getElementById('search').value = '';
         document.querySelectorAll('#package-filters input').forEach(cb => cb.checked = true);
         updateVisibility();
     };
-
-    function resetHighlight() {
-        selectedNode = null;
-        node.classed('dimmed', false);
-        link.classed('dimmed', false);
-        document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
-    }
 
     // Package filters
     const filtersDiv = document.getElementById('package-filters');
@@ -356,8 +464,6 @@ def format_html(results, cycle_edges):
     });
 
     filtersDiv.addEventListener('change', updateVisibility);
-
-    // Search
     document.getElementById('search').addEventListener('input', updateVisibility);
 
     function updateVisibility() {
@@ -366,22 +472,25 @@ def format_html(results, cycle_edges):
             [...document.querySelectorAll('#package-filters input:checked')].map(cb => cb.dataset.package)
         );
 
-        node.style('display', d => {
-            const matchesSearch = d.id.toLowerCase().includes(searchTerm);
-            const matchesPackage = checkedPackages.has(d.package);
-            return matchesSearch && matchesPackage ? null : 'none';
+        const visibleNodes = new Set();
+        nodes.forEach(n => {
+            const matchesSearch = n.id.toLowerCase().includes(searchTerm);
+            const matchesPackage = checkedPackages.has(n.package);
+            if (matchesSearch && matchesPackage) {
+                visibleNodes.add(n.id);
+            }
         });
 
-        const visibleNodes = new Set(data.nodes.filter(d => {
-            const matchesSearch = d.id.toLowerCase().includes(searchTerm);
-            const matchesPackage = checkedPackages.has(d.package);
-            return matchesSearch && matchesPackage;
-        }).map(d => d.id));
-
-        link.style('display', d =>
-            visibleNodes.has(d.source.id) && visibleNodes.has(d.target.id) ? null : 'none'
-        );
+        node.style('display', d => visibleNodes.has(d.id) ? null : 'none');
+        link.style('display', d => {
+            const src = typeof d.source === 'object' ? d.source.id : d.source;
+            const tgt = typeof d.target === 'object' ? d.target.id : d.target;
+            return visibleNodes.has(src) && visibleNodes.has(tgt) ? null : 'none';
+        });
     }
+
+    // Initial layout
+    dagreLayout('LR');
     </script>
 </body>
 </html>'''
