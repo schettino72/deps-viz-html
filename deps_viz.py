@@ -212,11 +212,11 @@ def format_html(results, cycle_edges):
     defs.append('marker')
         .attr('id', 'arrow')
         .attr('viewBox', '0 -5 10 10')
-        .attr('refX', 10)
+        .attr('refX', 8)
         .attr('refY', 0)
-        .attr('markerWidth', 6)
-        .attr('markerHeight', 6)
-        .attr('orient', 'auto')
+        .attr('markerWidth', 8)
+        .attr('markerHeight', 8)
+        .attr('orient', 'auto-start-reverse')
         .append('path')
         .attr('fill', '#999')
         .attr('d', 'M0,-5L10,0L0,5');
@@ -224,11 +224,11 @@ def format_html(results, cycle_edges):
     defs.append('marker')
         .attr('id', 'arrow-cycle')
         .attr('viewBox', '0 -5 10 10')
-        .attr('refX', 10)
+        .attr('refX', 8)
         .attr('refY', 0)
-        .attr('markerWidth', 6)
-        .attr('markerHeight', 6)
-        .attr('orient', 'auto')
+        .attr('markerWidth', 8)
+        .attr('markerHeight', 8)
+        .attr('orient', 'auto-start-reverse')
         .append('path')
         .attr('fill', '#e74c3c')
         .attr('d', 'M0,-5L10,0L0,5');
@@ -329,6 +329,32 @@ def format_html(results, cycle_edges):
         const nodeMap = {};
         nodes.forEach(n => nodeMap[n.id] = n);
 
+        // Helper to calculate edge intersection with node box
+        function getEdgePoint(node, otherNode) {
+            const dx = otherNode.x - node.x;
+            const dy = otherNode.y - node.y;
+            const w = node.width / 2;
+            const h = node.height / 2;
+
+            if (dx === 0 && dy === 0) return { x: node.x, y: node.y };
+
+            // Calculate intersection with node rectangle
+            const absDx = Math.abs(dx);
+            const absDy = Math.abs(dy);
+
+            let x, y;
+            if (absDx * h > absDy * w) {
+                // Intersects left or right edge
+                x = node.x + (dx > 0 ? w : -w);
+                y = node.y + dy * w / absDx;
+            } else {
+                // Intersects top or bottom edge
+                x = node.x + dx * h / absDy;
+                y = node.y + (dy > 0 ? h : -h);
+            }
+            return { x, y };
+        }
+
         // Draw links
         link = linkGroup.selectAll('path')
             .data(links)
@@ -347,7 +373,9 @@ def format_html(results, cycle_edges):
                 const src = typeof d.source === 'object' ? d.source : nodeMap[d.source];
                 const tgt = typeof d.target === 'object' ? d.target : nodeMap[d.target];
                 if (!src || !tgt) return '';
-                return `M${src.x},${src.y}L${tgt.x},${tgt.y}`;
+                const p1 = getEdgePoint(src, tgt);
+                const p2 = getEdgePoint(tgt, src);
+                return `M${p1.x},${p1.y}L${p2.x},${p2.y}`;
             });
 
         // Draw nodes
@@ -472,21 +500,30 @@ def format_html(results, cycle_edges):
             [...document.querySelectorAll('#package-filters input:checked')].map(cb => cb.dataset.package)
         );
 
-        const visibleNodes = new Set();
-        nodes.forEach(n => {
+        // Filter nodes based on search and package selection
+        const visibleNodeIds = new Set();
+        data.nodes.forEach(n => {
             const matchesSearch = n.id.toLowerCase().includes(searchTerm);
             const matchesPackage = checkedPackages.has(n.package);
             if (matchesSearch && matchesPackage) {
-                visibleNodes.add(n.id);
+                visibleNodeIds.add(n.id);
             }
         });
 
-        node.style('display', d => visibleNodes.has(d.id) ? null : 'none');
-        link.style('display', d => {
-            const src = typeof d.source === 'object' ? d.source.id : d.source;
-            const tgt = typeof d.target === 'object' ? d.target.id : d.target;
-            return visibleNodes.has(src) && visibleNodes.has(tgt) ? null : 'none';
-        });
+        // Update nodes and links arrays with only visible items
+        nodes = data.nodes.filter(n => visibleNodeIds.has(n.id)).map(n => ({...n}));
+        links = data.links.filter(l => visibleNodeIds.has(l.source) && visibleNodeIds.has(l.target))
+                         .map(l => ({source: l.source, target: l.target}));
+
+        // Re-run current layout
+        const layout = document.getElementById('layout-select').value;
+        if (layout === 'dagre-lr') {
+            dagreLayout('LR');
+        } else if (layout === 'dagre-tb') {
+            dagreLayout('TB');
+        } else {
+            forceLayout();
+        }
     }
 
     // Initial layout
