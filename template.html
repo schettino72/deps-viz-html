@@ -3,8 +3,9 @@
 <head>
     <meta charset="utf-8">
     <title>Import Dependencies</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/dagre/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre/cytoscape-dagre.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -17,15 +18,6 @@
             overflow-y: auto;
         }
         #graph { flex: 1; overflow: hidden; }
-        svg { width: 100%; height: 100%; }
-        .node { cursor: pointer; }
-        .node rect { stroke: #333; stroke-width: 1px; }
-        .node.matched rect { stroke: #000; stroke-width: 3px; }
-        .node.neighbor rect { opacity: 0.6; }
-        .node text { font-size: 11px; pointer-events: none; }
-        .link { fill: none; stroke: #999; stroke-width: 1.5px; }
-        .link.cycle { stroke: #e74c3c; stroke-width: 2.5px; }
-        .dimmed { opacity: 0.15; }
         h3 { margin-bottom: 10px; color: #333; font-size: 14px; }
         #search, #layout-select {
             width: 100%;
@@ -85,7 +77,7 @@
                 <select id="layout-select">
                     <option value="dagre-lr">Hierarchical (LR)</option>
                     <option value="dagre-tb">Hierarchical (TB)</option>
-                    <option value="force">Force-directed</option>
+                    <option value="cose">Force-directed</option>
                 </select>
             </div>
             <h3>Search</h3>
@@ -102,11 +94,11 @@
             <div class="legend">
                 <h3>Legend</h3>
                 <div class="legend-item">
-                    <svg width="30" height="12"><line x1="0" y1="6" x2="30" y2="6" stroke="#999" stroke-width="1.5"></line></svg>
+                    <svg width="30" height="12"><line x1="0" y1="6" x2="25" y2="6" stroke="#999" stroke-width="1.5"></line><polygon points="25,3 30,6 25,9" fill="#999"></polygon></svg>
                     <span style="margin-left:8px">Import</span>
                 </div>
                 <div class="legend-item">
-                    <svg width="30" height="12"><line x1="0" y1="6" x2="30" y2="6" stroke="#e74c3c" stroke-width="2.5"></line></svg>
+                    <svg width="30" height="12"><line x1="0" y1="6" x2="25" y2="6" stroke="#e74c3c" stroke-width="2.5"></line><polygon points="25,3 30,6 25,9" fill="#e74c3c"></polygon></svg>
                     <span style="margin-left:8px">Circular dependency</span>
                 </div>
             </div>
@@ -116,261 +108,174 @@
     <script>
     const data = /*GRAPH_DATA*/null;
 
-    // Color scale for packages
+    // Color palette for packages
+    const colorPalette = [
+        '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
+        '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'
+    ];
     const packages = [...new Set(data.nodes.map(n => n.package))].sort();
-    const color = d3.scaleOrdinal(d3.schemeTableau10).domain(packages);
+    const packageColors = {};
+    packages.forEach((pkg, i) => {
+        packageColors[pkg] = colorPalette[i % colorPalette.length];
+    });
 
     // Create cycle edge lookup
     const cycleSet = new Set(data.cycles.map(c => c[0] + '|' + c[1]));
 
-    // Setup SVG
-    const graphDiv = document.getElementById('graph');
-    const width = graphDiv.clientWidth;
-    const height = graphDiv.clientHeight;
+    // Build Cytoscape elements
+    function buildElements(nodeFilter) {
+        const visibleNodeIds = nodeFilter ? nodeFilter : new Set(data.nodes.map(n => n.id));
 
-    const svg = d3.select('#graph')
-        .append('svg')
-        .attr('width', width)
-        .attr('height', height);
+        const nodes = data.nodes
+            .filter(n => visibleNodeIds.has(n.id))
+            .map(n => ({
+                data: {
+                    id: n.id,
+                    label: n.id.split('.').pop(),
+                    package: n.package
+                }
+            }));
 
-    // Add zoom
-    const g = svg.append('g');
-    const zoom = d3.zoom()
-        .scaleExtent([0.1, 4])
-        .on('zoom', (event) => g.attr('transform', event.transform));
-    svg.call(zoom);
+        const edges = data.links
+            .filter(l => visibleNodeIds.has(l.source) && visibleNodeIds.has(l.target))
+            .map(l => ({
+                data: {
+                    id: l.source + '->' + l.target,
+                    source: l.source,
+                    target: l.target,
+                    isCycle: cycleSet.has(l.source + '|' + l.target)
+                },
+                classes: cycleSet.has(l.source + '|' + l.target) ? 'cycle' : ''
+            }));
 
-    // Arrow markers
-    const defs = svg.append('defs');
-    defs.append('marker')
-        .attr('id', 'arrow')
-        .attr('viewBox', '0 -5 10 10')
-        .attr('refX', 8)
-        .attr('refY', 0)
-        .attr('markerWidth', 8)
-        .attr('markerHeight', 8)
-        .attr('orient', 'auto-start-reverse')
-        .append('path')
-        .attr('fill', '#999')
-        .attr('d', 'M0,-5L10,0L0,5');
-
-    defs.append('marker')
-        .attr('id', 'arrow-cycle')
-        .attr('viewBox', '0 -5 10 10')
-        .attr('refX', 8)
-        .attr('refY', 0)
-        .attr('markerWidth', 8)
-        .attr('markerHeight', 8)
-        .attr('orient', 'auto-start-reverse')
-        .append('path')
-        .attr('fill', '#e74c3c')
-        .attr('d', 'M0,-5L10,0L0,5');
-
-    // Create node data with positions
-    let nodes = data.nodes.map(n => ({...n}));
-    let links = data.links.map(l => ({source: l.source, target: l.target}));
-
-    // Create link elements
-    const linkGroup = g.append('g').attr('class', 'links');
-    const nodeGroup = g.append('g').attr('class', 'nodes');
-
-    let link, node, simulation;
-
-    function getNodeWidth(label) {
-        return Math.max(60, label.length * 7 + 16);
+        return { nodes, edges };
     }
 
-    function dagreLayout(rankdir) {
-        // Stop any running simulation
-        if (simulation) {
-            simulation.stop();
-            simulation = null;
-        }
-
-        // Create dagre graph
-        const dagreGraph = new dagre.graphlib.Graph();
-        dagreGraph.setGraph({ rankdir: rankdir, nodesep: 30, ranksep: 80, marginx: 20, marginy: 20 });
-        dagreGraph.setDefaultEdgeLabel(() => ({}));
-
-        // Add nodes
-        nodes.forEach(n => {
-            const label = n.id.split('.').pop();
-            dagreGraph.setNode(n.id, { label: label, width: getNodeWidth(label), height: 30 });
-        });
-
-        // Add edges
-        links.forEach(l => {
-            const src = typeof l.source === 'object' ? l.source.id : l.source;
-            const tgt = typeof l.target === 'object' ? l.target.id : l.target;
-            dagreGraph.setEdge(src, tgt);
-        });
-
-        // Run layout
-        dagre.layout(dagreGraph);
-
-        // Update node positions
-        nodes.forEach(n => {
-            const dagreNode = dagreGraph.node(n.id);
-            n.x = dagreNode.x;
-            n.y = dagreNode.y;
-            n.width = dagreNode.width;
-            n.height = dagreNode.height;
-        });
-
-        // Reset links to use IDs
-        links = data.links.map(l => ({source: l.source, target: l.target}));
-
-        renderGraph();
-        centerGraph();
-    }
-
-    function forceLayout() {
-        // Reset links
-        links = data.links.map(l => ({source: l.source, target: l.target}));
-
-        // Set default sizes
-        nodes.forEach(n => {
-            const label = n.id.split('.').pop();
-            n.width = getNodeWidth(label);
-            n.height = 30;
-        });
-
-        renderGraph();
-
-        // Create simulation
-        simulation = d3.forceSimulation(nodes)
-            .force('link', d3.forceLink(links).id(d => d.id).distance(150))
-            .force('charge', d3.forceManyBody().strength(-500))
-            .force('center', d3.forceCenter(width / 2, height / 2))
-            .force('collision', d3.forceCollide().radius(50))
-            .on('tick', () => {
-                link.attr('d', d => {
-                    const sx = d.source.x, sy = d.source.y;
-                    const tx = d.target.x, ty = d.target.y;
-                    return `M${sx},${sy}L${tx},${ty}`;
-                });
-                node.attr('transform', d => `translate(${d.x - d.width/2},${d.y - d.height/2})`);
-            });
-    }
-
-    function renderGraph() {
-        // Clear existing elements
-        linkGroup.selectAll('*').remove();
-        nodeGroup.selectAll('*').remove();
-
-        // Create node map for link lookups
-        const nodeMap = {};
-        nodes.forEach(n => nodeMap[n.id] = n);
-
-        // Helper to calculate edge intersection with node box
-        function getEdgePoint(node, otherNode) {
-            const dx = otherNode.x - node.x;
-            const dy = otherNode.y - node.y;
-            const w = node.width / 2;
-            const h = node.height / 2;
-
-            if (dx === 0 && dy === 0) return { x: node.x, y: node.y };
-
-            // Calculate intersection with node rectangle
-            const absDx = Math.abs(dx);
-            const absDy = Math.abs(dy);
-
-            let x, y;
-            if (absDx * h > absDy * w) {
-                // Intersects left or right edge
-                x = node.x + (dx > 0 ? w : -w);
-                y = node.y + dy * w / absDx;
-            } else {
-                // Intersects top or bottom edge
-                x = node.x + dx * h / absDy;
-                y = node.y + (dy > 0 ? h : -h);
+    // Cytoscape style
+    const cyStyle = [
+        {
+            selector: 'node',
+            style: {
+                'label': 'data(label)',
+                'text-valign': 'center',
+                'text-halign': 'center',
+                'background-color': node => packageColors[node.data('package')] || '#999',
+                'border-width': 1,
+                'border-color': '#333',
+                'shape': 'roundrectangle',
+                'width': node => Math.max(60, node.data('label').length * 8 + 16),
+                'height': 28,
+                'font-size': 11,
+                'color': '#000'
             }
-            return { x, y };
+        },
+        {
+            selector: 'node.matched',
+            style: {
+                'border-width': 3,
+                'border-color': '#000'
+            }
+        },
+        {
+            selector: 'node.neighbor',
+            style: {
+                'opacity': 0.6
+            }
+        },
+        {
+            selector: 'node.dimmed',
+            style: {
+                'opacity': 0.15
+            }
+        },
+        {
+            selector: 'edge',
+            style: {
+                'width': 1.5,
+                'line-color': '#999',
+                'target-arrow-color': '#999',
+                'target-arrow-shape': 'triangle',
+                'curve-style': 'bezier',
+                'arrow-scale': 0.8
+            }
+        },
+        {
+            selector: 'edge.cycle',
+            style: {
+                'width': 2.5,
+                'line-color': '#e74c3c',
+                'target-arrow-color': '#e74c3c'
+            }
+        },
+        {
+            selector: 'edge.dimmed',
+            style: {
+                'opacity': 0.15
+            }
         }
+    ];
 
-        // Draw links
-        link = linkGroup.selectAll('path')
-            .data(links)
-            .join('path')
-            .attr('class', d => {
-                const src = typeof d.source === 'object' ? d.source.id : d.source;
-                const tgt = typeof d.target === 'object' ? d.target.id : d.target;
-                return cycleSet.has(src + '|' + tgt) ? 'link cycle' : 'link';
-            })
-            .attr('marker-end', d => {
-                const src = typeof d.source === 'object' ? d.source.id : d.source;
-                const tgt = typeof d.target === 'object' ? d.target.id : d.target;
-                return cycleSet.has(src + '|' + tgt) ? 'url(#arrow-cycle)' : 'url(#arrow)';
-            })
-            .attr('d', d => {
-                const src = typeof d.source === 'object' ? d.source : nodeMap[d.source];
-                const tgt = typeof d.target === 'object' ? d.target : nodeMap[d.target];
-                if (!src || !tgt) return '';
-                const p1 = getEdgePoint(src, tgt);
-                const p2 = getEdgePoint(tgt, src);
-                return `M${p1.x},${p1.y}L${p2.x},${p2.y}`;
-            });
+    // Initialize Cytoscape
+    let cy = cytoscape({
+        container: document.getElementById('graph'),
+        elements: buildElements(),
+        style: cyStyle,
+        layout: { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80 }
+    });
 
-        // Draw nodes
-        node = nodeGroup.selectAll('g')
-            .data(nodes)
-            .join('g')
-            .attr('class', 'node')
-            .attr('transform', d => `translate(${d.x - d.width/2},${d.y - d.height/2})`);
+    // Track state
+    let matchedNodeIds = new Set();
+    let neighborNodeIds = new Set();
 
-        node.append('rect')
-            .attr('width', d => d.width)
-            .attr('height', d => d.height)
-            .attr('rx', 4)
-            .attr('ry', 4)
-            .attr('fill', d => color(d.package));
-
-        node.append('text')
-            .attr('x', d => d.width / 2)
-            .attr('y', d => d.height / 2 + 4)
-            .attr('text-anchor', 'middle')
-            .text(d => d.id.split('.').pop());
-
-        // Node click handler
-        node.on('click', function(event, d) {
-            event.stopPropagation();
-            highlightNode(d);
-        });
+    // Layout functions
+    function runLayout(name) {
+        let layoutConfig;
+        if (name === 'dagre-lr') {
+            layoutConfig = { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80 };
+        } else if (name === 'dagre-tb') {
+            layoutConfig = { name: 'dagre', rankDir: 'TB', nodeSep: 30, rankSep: 80 };
+        } else {
+            layoutConfig = { name: 'cose', animate: false, nodeRepulsion: 8000, idealEdgeLength: 100 };
+        }
+        cy.layout(layoutConfig).run();
     }
 
-    function centerGraph() {
-        const bounds = g.node().getBBox();
-        const fullWidth = bounds.width;
-        const fullHeight = bounds.height;
-        const midX = bounds.x + fullWidth / 2;
-        const midY = bounds.y + fullHeight / 2;
+    // Layout selector
+    document.getElementById('layout-select').addEventListener('change', function() {
+        runLayout(this.value);
+    });
 
-        const scale = Math.min(0.9 * width / fullWidth, 0.9 * height / fullHeight, 1);
-        const translateX = width / 2 - midX * scale;
-        const translateY = height / 2 - midY * scale;
+    // Node click - highlight connections
+    cy.on('tap', 'node', function(evt) {
+        const node = evt.target;
+        const nodeId = node.id();
 
-        svg.transition().duration(500).call(
-            zoom.transform,
-            d3.zoomIdentity.translate(translateX, translateY).scale(scale)
-        );
-    }
+        const imports = data.links.filter(l => l.source === nodeId).map(l => l.target);
+        const importedBy = data.links.filter(l => l.target === nodeId).map(l => l.source);
+        const connected = new Set([nodeId, ...imports, ...importedBy]);
 
-    function highlightNode(d) {
-        const imports = data.links.filter(l => l.source === d.id).map(l => l.target);
-        const importedBy = data.links.filter(l => l.target === d.id).map(l => l.source);
-        const connected = new Set([d.id, ...imports, ...importedBy]);
-
-        node.classed('dimmed', n => !connected.has(n.id));
-        link.classed('dimmed', l => {
-            const src = typeof l.source === 'object' ? l.source.id : l.source;
-            const tgt = typeof l.target === 'object' ? l.target.id : l.target;
-            return src !== d.id && tgt !== d.id;
+        cy.nodes().forEach(n => {
+            if (connected.has(n.id())) {
+                n.removeClass('dimmed');
+            } else {
+                n.addClass('dimmed');
+            }
         });
 
+        cy.edges().forEach(e => {
+            if (e.source().id() === nodeId || e.target().id() === nodeId) {
+                e.removeClass('dimmed');
+            } else {
+                e.addClass('dimmed');
+            }
+        });
+
+        // Update info panel
+        const pkg = node.data('package') || '(root)';
         document.getElementById('info').innerHTML = `
-            <h4>${d.id}</h4>
+            <h4>${nodeId}</h4>
             <div class="info-section">
-                <strong>Package:</strong> ${d.package || '(root)'}
+                <strong>Package:</strong> ${pkg}
             </div>
             <div class="info-section">
                 <strong>Imports (${imports.length}):</strong>
@@ -381,28 +286,20 @@
                 <ul>${importedBy.map(i => '<li>' + i + '</li>').join('') || '<li>None</li>'}</ul>
             </div>
         `;
-    }
-
-    function resetHighlight() {
-        node.classed('dimmed', false);
-        link.classed('dimmed', false);
-        document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
-    }
-
-    // Layout selector
-    document.getElementById('layout-select').addEventListener('change', function() {
-        const layout = this.value;
-        if (layout === 'dagre-lr') {
-            dagreLayout('LR');
-        } else if (layout === 'dagre-tb') {
-            dagreLayout('TB');
-        } else {
-            forceLayout();
-        }
     });
 
     // Click background to reset
-    svg.on('click', resetHighlight);
+    cy.on('tap', function(evt) {
+        if (evt.target === cy) {
+            resetHighlight();
+        }
+    });
+
+    function resetHighlight() {
+        cy.nodes().removeClass('dimmed');
+        cy.edges().removeClass('dimmed');
+        document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
+    }
 
     document.getElementById('reset-btn').onclick = () => {
         resetHighlight();
@@ -418,7 +315,7 @@
         label.className = 'package-filter';
         label.innerHTML = `
             <input type="checkbox" checked data-package="${pkg}">
-            <span class="color-dot" style="background:${color(pkg)}"></span>
+            <span class="color-dot" style="background:${packageColors[pkg]}"></span>
             ${pkg || '(root)'}
         `;
         filtersDiv.appendChild(label);
@@ -426,10 +323,6 @@
 
     filtersDiv.addEventListener('change', updateVisibility);
     document.getElementById('search').addEventListener('input', updateVisibility);
-
-    // Track matched vs neighbor nodes for styling
-    let matchedNodeIds = new Set();
-    let neighborNodeIds = new Set();
 
     function updateVisibility() {
         const searchTerm = document.getElementById('search').value.toLowerCase();
@@ -447,10 +340,9 @@
             }
         });
 
-        // Find neighbors of matched nodes (imports and importers)
+        // Find neighbors of matched nodes
         neighborNodeIds = new Set();
         if (searchTerm !== '') {
-            // Only expand to neighbors when there's an active search
             data.links.forEach(l => {
                 if (matchedNodeIds.has(l.source) && !matchedNodeIds.has(l.target)) {
                     neighborNodeIds.add(l.target);
@@ -464,28 +356,23 @@
         // Combine matched and neighbor nodes
         const visibleNodeIds = new Set([...matchedNodeIds, ...neighborNodeIds]);
 
-        // Update nodes and links arrays with visible items
-        nodes = data.nodes.filter(n => visibleNodeIds.has(n.id)).map(n => ({...n}));
-        links = data.links.filter(l => visibleNodeIds.has(l.source) && visibleNodeIds.has(l.target))
-                         .map(l => ({source: l.source, target: l.target}));
-
-        // Re-run current layout
-        const layout = document.getElementById('layout-select').value;
-        if (layout === 'dagre-lr') {
-            dagreLayout('LR');
-        } else if (layout === 'dagre-tb') {
-            dagreLayout('TB');
-        } else {
-            forceLayout();
-        }
+        // Rebuild graph with visible nodes
+        const elements = buildElements(visibleNodeIds);
+        cy.json({ elements });
 
         // Apply matched/neighbor styling
-        node.classed('matched', d => matchedNodeIds.has(d.id));
-        node.classed('neighbor', d => neighborNodeIds.has(d.id));
-    }
+        cy.nodes().forEach(n => {
+            n.removeClass('matched neighbor');
+            if (matchedNodeIds.has(n.id())) {
+                n.addClass('matched');
+            } else if (neighborNodeIds.has(n.id())) {
+                n.addClass('neighbor');
+            }
+        });
 
-    // Initial layout
-    dagreLayout('LR');
+        // Run layout
+        runLayout(document.getElementById('layout-select').value);
+    }
     </script>
 </body>
 </html>
