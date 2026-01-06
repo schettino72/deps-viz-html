@@ -232,6 +232,14 @@
             }
         },
         {
+            selector: 'node.soft-selected',
+            style: {
+                'border-width': 3,
+                'border-color': '#e74c3c',
+                'border-style': 'dashed'
+            }
+        },
+        {
             selector: 'node.highlight-dim',
             style: {
                 'opacity': 0.3
@@ -292,8 +300,10 @@
 
         const layout = cy.layout(layoutConfig);
         layout.on('layoutstop', () => {
-            if (centerNodeId) {
-                const node = cy.getElementById(centerNodeId);
+            // Center on: explicit node > soft-selected > fit all
+            const targetNodeId = centerNodeId || softSelectedNodeId;
+            if (targetNodeId) {
+                const node = cy.getElementById(targetNodeId);
                 if (node.length) {
                     cy.animate({
                         center: { eles: node },
@@ -301,14 +311,14 @@
                         duration: 300,
                         easing: 'ease-out'
                     });
+                    return;
                 }
-            } else {
-                cy.animate({
-                    fit: { eles: cy.elements(), padding: 30 },
-                    duration: 300,
-                    easing: 'ease-out'
-                });
             }
+            cy.animate({
+                fit: { eles: cy.elements(), padding: 30 },
+                duration: 300,
+                easing: 'ease-out'
+            });
         });
         layout.run();
     }
@@ -349,6 +359,7 @@
 
     // Track click-selected node (not hover)
     let selectedNodeId = null;
+    let softSelectedNodeId = null;
 
     // Set visual selection on a single node
     function setVisualSelection(nodeId) {
@@ -357,6 +368,31 @@
             const node = cy.getElementById(nodeId);
             if (node.length) node.addClass('selected');
         }
+    }
+
+    // Set soft selection (dashed border, visible in full graph)
+    function setSoftSelection(nodeId, centerOn) {
+        cy.nodes().removeClass('soft-selected');
+        softSelectedNodeId = nodeId;
+        if (nodeId) {
+            const node = cy.getElementById(nodeId);
+            if (node.length) {
+                node.addClass('soft-selected');
+                if (centerOn) {
+                    cy.animate({
+                        center: { eles: node },
+                        duration: 300,
+                        easing: 'ease-out'
+                    });
+                }
+            }
+        }
+    }
+
+    // Clear soft selection
+    function clearSoftSelection() {
+        cy.nodes().removeClass('soft-selected');
+        softSelectedNodeId = null;
     }
 
     // Apply highlight effect (dim unconnected nodes)
@@ -452,16 +488,22 @@
 
         const nodeId = evt.target.id();
 
-        // Toggle: clicking selected node deselects it
+        // Toggle: clicking selected node deselects it but keeps soft-selected
         if (selectedNodeId === nodeId) {
+            // Set soft-selected BEFORE clearing so runLayout can center on it
+            softSelectedNodeId = nodeId;
             if (action === 'focus') {
                 clearFocus();
             } else {
                 clearHighlight();
             }
-            document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
+            // Apply visual soft-selected class (centering handled by runLayout)
+            setSoftSelection(nodeId, false);
             return;
         }
+
+        // Clicking a new node clears soft selection
+        clearSoftSelection();
 
         if (action === 'highlight') {
             focusedNodeId = nodeId; // lock highlight
@@ -475,17 +517,20 @@
     // Click background to reset
     cy.on('tap', function(evt) {
         if (evt.target === cy) {
+            clearSoftSelection();
             if (focusedNodeId) {
                 clearFocus();
-                document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
             }
+            document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
         }
     });
 
     document.getElementById('reset-btn').onclick = () => {
         focusedNodeId = null;
         selectedNodeId = null;
-        clearHighlight();
+        softSelectedNodeId = null;
+        cy.nodes().removeClass('highlight-dim selected soft-selected');
+        cy.edges().removeClass('highlight-dim');
         document.getElementById('search').value = '';
         document.querySelectorAll('#package-filters input').forEach(cb => cb.checked = true);
         updateVisibility();
@@ -546,7 +591,7 @@
 
         // Apply matched/neighbor styling (clear selected since graph was rebuilt)
         cy.nodes().forEach(n => {
-            n.removeClass('matched neighbor selected highlight-dim');
+            n.removeClass('matched neighbor selected highlight-dim soft-selected');
             if (matchedNodeIds.has(n.id())) {
                 n.addClass('matched');
             } else if (neighborNodeIds.has(n.id())) {
@@ -554,6 +599,12 @@
             }
         });
         cy.edges().removeClass('highlight-dim');
+
+        // Re-apply soft-selected if node is still visible
+        if (softSelectedNodeId) {
+            const node = cy.getElementById(softSelectedNodeId);
+            if (node.length) node.addClass('soft-selected');
+        }
 
         // Run layout
         runLayout(document.getElementById('layout-select').value);

@@ -1,0 +1,9 @@
+[
+  {"module": "foo.__init__", "imports": []},
+  {"module": "foo.foo_a", "imports": ["foo.foo_b", "foo.foo_c"]},
+  {"module": "foo.foo_b", "imports": []},
+  {"module": "foo.foo_c", "imports": ["foo.__init__"]},
+  {"module": "foo.foo_d", "imports": ["foo.foo_c"]},
+  {"module": "foo.sub.__init__", "imports": []},
+  {"module": "foo.sub.sub_a", "imports": ["foo.foo_d"]}
+]
