@@ -143,10 +143,10 @@
     <script>
     const data = /*GRAPH_DATA*/null;
 
-    // Color palette for packages
+    // Color palette for packages (lighter, more readable with dark text)
     const colorPalette = [
-        '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
-        '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac'
+        '#7cb5ec', '#f7a35c', '#90ed7d', '#8085e9', '#f15c80',
+        '#e4d354', '#2b908f', '#f45b5b', '#91e8e1', '#c4a4e0'
     ];
     const packages = [...new Set(data.nodes.map(n => n.package))].sort();
     const packageColors = {};
@@ -222,11 +222,11 @@
         {
             selector: 'node.selected',
             style: {
-                'border-width': 3,
-                'border-color': '#2c3e50',
-                'shadow-blur': 10,
-                'shadow-color': '#2c3e50',
-                'shadow-opacity': 0.6,
+                'border-width': 4,
+                'border-color': '#e74c3c',
+                'shadow-blur': 15,
+                'shadow-color': '#e74c3c',
+                'shadow-opacity': 0.8,
                 'shadow-offset-x': 0,
                 'shadow-offset-y': 0
             }
@@ -280,16 +280,37 @@
     let focusedNodeId = null;
 
     // Layout functions
-    function runLayout(name) {
+    function runLayout(name, centerNodeId) {
         let layoutConfig;
         if (name === 'dagre-lr') {
-            layoutConfig = { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80 };
+            layoutConfig = { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80, animate: true, animationDuration: 300 };
         } else if (name === 'dagre-tb') {
-            layoutConfig = { name: 'dagre', rankDir: 'TB', nodeSep: 30, rankSep: 80 };
+            layoutConfig = { name: 'dagre', rankDir: 'TB', nodeSep: 30, rankSep: 80, animate: true, animationDuration: 300 };
         } else {
-            layoutConfig = { name: 'cose', animate: false, nodeRepulsion: 8000, idealEdgeLength: 100 };
+            layoutConfig = { name: 'cose', animate: true, animationDuration: 300, nodeRepulsion: 8000, idealEdgeLength: 100 };
         }
-        cy.layout(layoutConfig).run();
+
+        const layout = cy.layout(layoutConfig);
+        layout.on('layoutstop', () => {
+            if (centerNodeId) {
+                const node = cy.getElementById(centerNodeId);
+                if (node.length) {
+                    cy.animate({
+                        center: { eles: node },
+                        zoom: Math.min(cy.zoom(), 1.5),
+                        duration: 300,
+                        easing: 'ease-out'
+                    });
+                }
+            } else {
+                cy.animate({
+                    fit: { eles: cy.elements(), padding: 30 },
+                    duration: 300,
+                    easing: 'ease-out'
+                });
+            }
+        });
+        layout.run();
     }
 
     // Layout selector
@@ -326,58 +347,70 @@
         `;
     }
 
-    // Apply highlight effect (dim unconnected nodes)
-    function applyHighlight(nodeId) {
+    // Track click-selected node (not hover)
+    let selectedNodeId = null;
+
+    // Set visual selection on a single node
+    function setVisualSelection(nodeId) {
         cy.nodes().removeClass('selected');
+        if (nodeId) {
+            const node = cy.getElementById(nodeId);
+            if (node.length) node.addClass('selected');
+        }
+    }
+
+    // Apply highlight effect (dim unconnected nodes)
+    function applyHighlight(nodeId, isClick) {
+        if (isClick) selectedNodeId = nodeId;
         const { connected } = getConnections(nodeId);
 
-        cy.nodes().forEach(n => {
-            n.removeClass('highlight-dim');
-            if (!connected.has(n.id())) {
-                n.addClass('highlight-dim');
-            }
-        });
-        cy.getElementById(nodeId).addClass('selected');
+        cy.nodes().removeClass('highlight-dim');
+        cy.edges().removeClass('highlight-dim');
 
-        cy.edges().forEach(e => {
-            e.removeClass('highlight-dim');
-            if (e.source().id() !== nodeId && e.target().id() !== nodeId) {
-                e.addClass('highlight-dim');
-            }
+        cy.nodes().forEach(n => {
+            if (!connected.has(n.id())) n.addClass('highlight-dim');
         });
+        cy.edges().forEach(e => {
+            if (e.source().id() !== nodeId && e.target().id() !== nodeId) e.addClass('highlight-dim');
+        });
+
+        setVisualSelection(nodeId);
     }
 
     // Clear highlight effects
     function clearHighlight() {
-        cy.nodes().removeClass('highlight-dim selected');
+        selectedNodeId = null;
+        cy.nodes().removeClass('highlight-dim');
         cy.edges().removeClass('highlight-dim');
+        setVisualSelection(null);
     }
 
     // Apply focus effect (rebuild graph with only connected nodes)
     function applyFocus(nodeId) {
-        cy.nodes().removeClass('selected');
+        selectedNodeId = nodeId;
         focusedNodeId = nodeId;
         const { connected } = getConnections(nodeId);
 
         const elements = buildElements(connected);
         cy.json({ elements });
-        cy.getElementById(nodeId).addClass('selected');
-        runLayout(document.getElementById('layout-select').value);
+        setVisualSelection(nodeId);
+        runLayout(document.getElementById('layout-select').value, nodeId);
     }
 
     // Clear focus (restore full graph)
     function clearFocus() {
         if (!focusedNodeId) return;
         focusedNodeId = null;
-
-        // Rebuild with current filter settings
+        selectedNodeId = null;
         updateVisibility();
     }
 
     // Reset all
     function resetAll() {
         focusedNodeId = null;
-        clearHighlight();
+        selectedNodeId = null;
+        cy.nodes().removeClass('highlight-dim selected');
+        cy.edges().removeClass('highlight-dim');
         document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
     }
 
@@ -386,10 +419,11 @@
         const action = document.getElementById('hover-action').value;
         if (action === 'none') return;
         if (focusedNodeId) return; // don't override focus
+        if (selectedNodeId) return; // don't override click selection
 
         const nodeId = evt.target.id();
         if (action === 'highlight') {
-            applyHighlight(nodeId);
+            applyHighlight(nodeId, false);
         } else if (action === 'focus') {
             applyFocus(nodeId);
         }
@@ -399,10 +433,12 @@
     cy.on('mouseout', 'node', function(evt) {
         const action = document.getElementById('hover-action').value;
         if (action === 'none') return;
-        if (focusedNodeId) return;
+        if (focusedNodeId) return; // don't clear focus
+        if (selectedNodeId) return; // don't clear click selection
 
         if (action === 'highlight') {
-            clearHighlight();
+            cy.nodes().removeClass('highlight-dim selected');
+            cy.edges().removeClass('highlight-dim');
         } else if (action === 'focus') {
             clearFocus();
         }
@@ -415,9 +451,21 @@
         if (action === 'none') return;
 
         const nodeId = evt.target.id();
+
+        // Toggle: clicking selected node deselects it
+        if (selectedNodeId === nodeId) {
+            if (action === 'focus') {
+                clearFocus();
+            } else {
+                clearHighlight();
+            }
+            document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
+            return;
+        }
+
         if (action === 'highlight') {
             focusedNodeId = nodeId; // lock highlight
-            applyHighlight(nodeId);
+            applyHighlight(nodeId, true);
         } else if (action === 'focus') {
             applyFocus(nodeId);
         }
@@ -436,6 +484,7 @@
 
     document.getElementById('reset-btn').onclick = () => {
         focusedNodeId = null;
+        selectedNodeId = null;
         clearHighlight();
         document.getElementById('search').value = '';
         document.querySelectorAll('#package-filters input').forEach(cb => cb.checked = true);
@@ -495,15 +544,16 @@
         const elements = buildElements(visibleNodeIds);
         cy.json({ elements });
 
-        // Apply matched/neighbor styling
+        // Apply matched/neighbor styling (clear selected since graph was rebuilt)
         cy.nodes().forEach(n => {
-            n.removeClass('matched neighbor');
+            n.removeClass('matched neighbor selected highlight-dim');
             if (matchedNodeIds.has(n.id())) {
                 n.addClass('matched');
             } else if (neighborNodeIds.has(n.id())) {
                 n.addClass('neighbor');
             }
         });
+        cy.edges().removeClass('highlight-dim');
 
         // Run layout
         runLayout(document.getElementById('layout-select').value);
