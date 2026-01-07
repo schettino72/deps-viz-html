@@ -83,6 +83,30 @@
             border-radius: 4px;
             font-size: 12px;
         }
+        #removed-nodes {
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .removed-node {
+            display: flex;
+            align-items: center;
+            padding: 3px 0;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .removed-node:hover {
+            background: #e8e8e8;
+        }
+        .removed-node .restore-btn {
+            margin-right: 6px;
+            color: #27ae60;
+            font-weight: bold;
+        }
+        #removed-count {
+            font-size: 11px;
+            color: #666;
+            font-weight: normal;
+        }
     </style>
 </head>
 <body>
@@ -103,6 +127,11 @@
                 <div id="package-filters"></div>
             </div>
             <button id="reset-btn">Reset View</button>
+            <div class="filter-section">
+                <h3>Removed Nodes <span id="removed-count"></span></h3>
+                <div id="removed-nodes"></div>
+                <button id="restore-all-btn" style="display:none;margin-top:8px;padding:4px 8px;font-size:11px;">Restore All</button>
+            </div>
             <div id="info">
                 <h4>Module Info</h4>
                 <p>Click a node to see details</p>
@@ -143,6 +172,67 @@
     <script>
     const data = /*GRAPH_DATA*/null;
 
+    // Removed nodes (persisted in sessionStorage)
+    const STORAGE_KEY = 'deps-viz-removed-nodes';
+    let removedNodeIds = new Set(JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '[]'));
+
+    function saveRemovedNodes() {
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify([...removedNodeIds]));
+    }
+
+    function removeNode(nodeId) {
+        removedNodeIds.add(nodeId);
+        saveRemovedNodes();
+        renderRemovedNodes();
+        // Clear selection if removing selected node
+        if (selectedNodeId === nodeId) selectedNodeId = null;
+        if (softSelectedNodeId === nodeId) softSelectedNodeId = null;
+        if (focusedNodeId === nodeId) focusedNodeId = null;
+        updateVisibility();
+    }
+
+    function restoreNode(nodeId) {
+        removedNodeIds.delete(nodeId);
+        saveRemovedNodes();
+        renderRemovedNodes();
+        updateVisibility();
+    }
+
+    function renderRemovedNodes() {
+        const container = document.getElementById('removed-nodes');
+        const countEl = document.getElementById('removed-count');
+        const restoreAllBtn = document.getElementById('restore-all-btn');
+
+        countEl.textContent = removedNodeIds.size ? `(${removedNodeIds.size})` : '';
+        restoreAllBtn.style.display = removedNodeIds.size > 1 ? 'inline-block' : 'none';
+
+        if (removedNodeIds.size === 0) {
+            container.innerHTML = '<div style="font-size:11px;color:#888;">Shift+click to remove</div>';
+            return;
+        }
+
+        container.innerHTML = [...removedNodeIds].sort().map(id => `
+            <div class="removed-node" data-node="${id}">
+                <span class="restore-btn">+</span>
+                <span>${id}</span>
+            </div>
+        `).join('');
+    }
+
+    function restoreAllNodes() {
+        removedNodeIds.clear();
+        saveRemovedNodes();
+        renderRemovedNodes();
+        updateVisibility();
+    }
+
+    document.getElementById('removed-nodes').addEventListener('click', (e) => {
+        const item = e.target.closest('.removed-node');
+        if (item) restoreNode(item.dataset.node);
+    });
+
+    document.getElementById('restore-all-btn').addEventListener('click', restoreAllNodes);
+
     // Color palette for packages (lighter, more readable with dark text)
     const colorPalette = [
         '#7cb5ec', '#f7a35c', '#90ed7d', '#8085e9', '#f15c80',
@@ -162,7 +252,7 @@
         const visibleNodeIds = nodeFilter ? nodeFilter : new Set(data.nodes.map(n => n.id));
 
         const nodes = data.nodes
-            .filter(n => visibleNodeIds.has(n.id))
+            .filter(n => visibleNodeIds.has(n.id) && !removedNodeIds.has(n.id))
             .map(n => ({
                 data: {
                     id: n.id,
@@ -172,7 +262,8 @@
             }));
 
         const edges = data.links
-            .filter(l => visibleNodeIds.has(l.source) && visibleNodeIds.has(l.target))
+            .filter(l => visibleNodeIds.has(l.source) && visibleNodeIds.has(l.target)
+                      && !removedNodeIds.has(l.source) && !removedNodeIds.has(l.target))
             .map(l => ({
                 data: {
                     id: l.source + '->' + l.target,
@@ -483,10 +574,16 @@
 
     // Click events
     cy.on('tap', 'node', function(evt) {
+        const nodeId = evt.target.id();
+
+        // Shift+click to remove node
+        if (evt.originalEvent.shiftKey) {
+            removeNode(nodeId);
+            return;
+        }
+
         const action = document.getElementById('click-action').value;
         if (action === 'none') return;
-
-        const nodeId = evt.target.id();
 
         // Toggle: clicking selected node deselects it but keeps soft-selected
         if (selectedNodeId === nodeId) {
@@ -608,6 +705,12 @@
 
         // Run layout
         runLayout(document.getElementById('layout-select').value);
+    }
+
+    // Initialize removed nodes panel and apply filter
+    renderRemovedNodes();
+    if (removedNodeIds.size > 0) {
+        updateVisibility();
     }
     </script>
 </body>
