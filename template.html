@@ -34,7 +34,18 @@
             padding: 4px 0;
             font-size: 13px;
         }
-        .package-filter input { margin-right: 8px; }
+        .package-filter input[type="checkbox"] { margin-right: 8px; }
+        .package-filter .collapse-btn {
+            margin-left: auto;
+            padding: 0 4px;
+            font-size: 10px;
+            background: #ddd;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .package-filter .collapse-btn:hover { background: #ccc; }
+        .package-filter .collapse-btn.collapsed { background: #3498db; color: white; }
         .color-dot {
             width: 12px;
             height: 12px;
@@ -174,7 +185,9 @@
 
     // Removed nodes (persisted in sessionStorage)
     const STORAGE_KEY = 'deps-viz-removed-nodes';
+    const COLLAPSED_KEY = 'deps-viz-collapsed-packages';
     let removedNodeIds = new Set(JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '[]'));
+    let collapsedPackages = new Set(JSON.parse(sessionStorage.getItem(COLLAPSED_KEY) || '[]'));
 
     function saveRemovedNodes() {
         sessionStorage.setItem(STORAGE_KEY, JSON.stringify([...removedNodeIds]));
@@ -233,6 +246,31 @@
 
     document.getElementById('restore-all-btn').addEventListener('click', restoreAllNodes);
 
+    // Collapsed packages
+    function saveCollapsedPackages() {
+        sessionStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsedPackages]));
+    }
+
+    function togglePackageCollapse(pkg) {
+        if (collapsedPackages.has(pkg)) {
+            collapsedPackages.delete(pkg);
+        } else {
+            collapsedPackages.add(pkg);
+        }
+        saveCollapsedPackages();
+        updateCollapseButtons();
+        updateVisibility();
+    }
+
+    function updateCollapseButtons() {
+        document.querySelectorAll('.collapse-btn').forEach(btn => {
+            const pkg = btn.dataset.package;
+            btn.classList.toggle('collapsed', collapsedPackages.has(pkg));
+            btn.textContent = collapsedPackages.has(pkg) ? '◆' : '◇';
+            btn.title = collapsedPackages.has(pkg) ? 'Expand package' : 'Collapse package';
+        });
+    }
+
     // Color palette for packages (lighter, more readable with dark text)
     const colorPalette = [
         '#7cb5ec', '#f7a35c', '#90ed7d', '#8085e9', '#f15c80',
@@ -247,34 +285,82 @@
     // Create cycle edge lookup
     const cycleSet = new Set(data.cycles.map(c => c[0] + '|' + c[1]));
 
+    // Helper: get package for a node id
+    function getNodePackage(nodeId) {
+        const node = data.nodes.find(n => n.id === nodeId);
+        return node ? node.package : '';
+    }
+
+    // Helper: map node id to collapsed package node if applicable
+    function mapToCollapsed(nodeId) {
+        const pkg = getNodePackage(nodeId);
+        if (collapsedPackages.has(pkg)) {
+            return 'pkg:' + pkg;
+        }
+        return nodeId;
+    }
+
     // Build Cytoscape elements
     function buildElements(nodeFilter) {
         const visibleNodeIds = nodeFilter ? nodeFilter : new Set(data.nodes.map(n => n.id));
 
-        const nodes = data.nodes
-            .filter(n => visibleNodeIds.has(n.id) && !removedNodeIds.has(n.id))
-            .map(n => ({
-                data: {
-                    id: n.id,
-                    label: n.id.split('.').pop(),
-                    package: n.package
+        const nodes = [];
+        const addedCollapsedPkgs = new Set();
+
+        data.nodes.forEach(n => {
+            if (!visibleNodeIds.has(n.id) || removedNodeIds.has(n.id)) return;
+
+            if (collapsedPackages.has(n.package)) {
+                // Add collapsed package node once
+                if (!addedCollapsedPkgs.has(n.package)) {
+                    addedCollapsedPkgs.add(n.package);
+                    nodes.push({
+                        data: {
+                            id: 'pkg:' + n.package,
+                            label: n.package + ' ⊞',
+                            package: n.package,
+                            isCollapsed: true
+                        }
+                    });
                 }
-            }));
+            } else {
+                nodes.push({
+                    data: {
+                        id: n.id,
+                        label: n.id.split('.').pop(),
+                        package: n.package
+                    }
+                });
+            }
+        });
 
-        const edges = data.links
-            .filter(l => visibleNodeIds.has(l.source) && visibleNodeIds.has(l.target)
-                      && !removedNodeIds.has(l.source) && !removedNodeIds.has(l.target))
-            .map(l => ({
-                data: {
-                    id: l.source + '->' + l.target,
-                    source: l.source,
-                    target: l.target,
-                    isCycle: cycleSet.has(l.source + '|' + l.target)
-                },
-                classes: cycleSet.has(l.source + '|' + l.target) ? 'cycle' : ''
-            }));
+        // Build edges with deduplication for collapsed packages
+        const edgeMap = new Map();
+        data.links.forEach(l => {
+            if (!visibleNodeIds.has(l.source) || !visibleNodeIds.has(l.target)) return;
+            if (removedNodeIds.has(l.source) || removedNodeIds.has(l.target)) return;
 
-        return { nodes, edges };
+            const source = mapToCollapsed(l.source);
+            const target = mapToCollapsed(l.target);
+
+            // Skip self-loops on collapsed packages
+            if (source === target && source.startsWith('pkg:')) return;
+
+            const edgeKey = source + '->' + target;
+            if (!edgeMap.has(edgeKey)) {
+                edgeMap.set(edgeKey, {
+                    data: {
+                        id: edgeKey,
+                        source: source,
+                        target: target,
+                        isCycle: cycleSet.has(l.source + '|' + l.target)
+                    },
+                    classes: cycleSet.has(l.source + '|' + l.target) ? 'cycle' : ''
+                });
+            }
+        });
+
+        return { nodes, edges: [...edgeMap.values()] };
     }
 
     // Cytoscape style
@@ -576,6 +662,13 @@
     cy.on('tap', 'node', function(evt) {
         const nodeId = evt.target.id();
 
+        // Clicking collapsed package node expands it
+        if (nodeId.startsWith('pkg:')) {
+            const pkg = nodeId.substring(4);
+            togglePackageCollapse(pkg);
+            return;
+        }
+
         // Shift+click to remove node
         if (evt.originalEvent.shiftKey) {
             removeNode(nodeId);
@@ -637,17 +730,29 @@
     // Package filters
     const filtersDiv = document.getElementById('package-filters');
     packages.forEach(pkg => {
-        const label = document.createElement('label');
-        label.className = 'package-filter';
-        label.innerHTML = `
+        const div = document.createElement('div');
+        div.className = 'package-filter';
+        div.innerHTML = `
             <input type="checkbox" checked data-package="${pkg}">
             <span class="color-dot" style="background:${packageColors[pkg]}"></span>
-            ${pkg || '(root)'}
+            <span style="flex:1">${pkg || '(root)'}</span>
+            <button class="collapse-btn" data-package="${pkg}" title="Collapse package">◇</button>
         `;
-        filtersDiv.appendChild(label);
+        filtersDiv.appendChild(div);
     });
 
-    filtersDiv.addEventListener('change', updateVisibility);
+    filtersDiv.addEventListener('change', (e) => {
+        if (e.target.type === 'checkbox') updateVisibility();
+    });
+
+    filtersDiv.addEventListener('click', (e) => {
+        if (e.target.classList.contains('collapse-btn')) {
+            togglePackageCollapse(e.target.dataset.package);
+        }
+    });
+
+    // Initialize collapse button states
+    updateCollapseButtons();
     document.getElementById('search').addEventListener('input', updateVisibility);
 
     function updateVisibility() {
@@ -707,9 +812,9 @@
         runLayout(document.getElementById('layout-select').value);
     }
 
-    // Initialize removed nodes panel and apply filter
+    // Initialize removed nodes panel and apply filters
     renderRemovedNodes();
-    if (removedNodeIds.size > 0) {
+    if (removedNodeIds.size > 0 || collapsedPackages.size > 0) {
         updateVisibility();
     }
     </script>
