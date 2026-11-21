@@ -117,6 +117,19 @@
             color: #666;
             font-weight: normal;
         }
+        #empty-state {
+            display: none;
+            flex: 1;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: #333;
+        }
+        #empty-state h2 { margin-bottom: 12px; }
+        #empty-state p { margin: 8px 0; font-size: 14px; }
+        #empty-state .hint { color: #888; font-size: 12px; }
+        #empty-state .file-btn { color: #3498db; cursor: pointer; text-decoration: underline; }
+        #empty-state input[type="file"] { display: none; }
     </style>
 </head>
 <body>
@@ -175,6 +188,14 @@
                         <option value="none">None</option>
                     </select>
                 </div>
+            </div>
+        </div>
+        <div id="empty-state">
+            <div>
+                <h2>Import Dependencies</h2>
+                <p>Drop an <code>import_deps --json</code> file here, or
+                    <label class="file-btn">choose a file<input type="file" id="file-input" accept=".json,application/json"></label></p>
+                <p class="hint">The file is processed in your browser. Nothing is uploaded.</p>
             </div>
         </div>
         <div id="graph"></div>
@@ -240,16 +261,41 @@
         return { nodes, links, cycles: findCycleEdges(links) };
     }
 
-    const data = buildGraph(results);
+    // Text from the data must never be interpreted as HTML
+    function escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
 
-    // Removed nodes (persisted in sessionStorage)
-    const STORAGE_KEY = 'deps-viz-removed-nodes';
-    const COLLAPSED_KEY = 'deps-viz-collapsed-packages';
-    let removedNodeIds = new Set(JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '[]'));
-    let collapsedPackages = new Set(JSON.parse(sessionStorage.getItem(COLLAPSED_KEY) || '[]'));
+    // Short stable hash, used to key sessionStorage per dataset
+    function hashString(text) {
+        let hash = 0x811c9dc5;  // FNV-1a
+        for (let i = 0; i < text.length; i++) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 0x01000193);
+        }
+        return (hash >>> 0).toString(16);
+    }
+
+    // Graph state, set by init()
+    let data = null;
+    let packages = [];
+    const packageColors = {};
+    let cycleSet = new Set();
+    let cy = null;
+
+    // Removed nodes and collapsed packages (persisted in sessionStorage, per dataset)
+    let storageKey = null;
+    let collapsedKey = null;
+    let removedNodeIds = new Set();
+    let collapsedPackages = new Set();
 
     function saveRemovedNodes() {
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify([...removedNodeIds]));
+        sessionStorage.setItem(storageKey, JSON.stringify([...removedNodeIds]));
     }
 
     function removeNode(nodeId) {
@@ -284,9 +330,9 @@
         }
 
         container.innerHTML = [...removedNodeIds].sort().map(id => `
-            <div class="removed-node" data-node="${id}">
+            <div class="removed-node" data-node="${escapeHtml(id)}">
                 <span class="restore-btn">+</span>
-                <span>${id}</span>
+                <span>${escapeHtml(id)}</span>
             </div>
         `).join('');
     }
@@ -307,7 +353,7 @@
 
     // Collapsed packages
     function saveCollapsedPackages() {
-        sessionStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsedPackages]));
+        sessionStorage.setItem(collapsedKey, JSON.stringify([...collapsedPackages]));
     }
 
     function togglePackageCollapse(pkg) {
@@ -335,14 +381,6 @@
         '#7cb5ec', '#f7a35c', '#90ed7d', '#8085e9', '#f15c80',
         '#e4d354', '#2b908f', '#f45b5b', '#91e8e1', '#c4a4e0'
     ];
-    const packages = [...new Set(data.nodes.map(n => n.package))].sort();
-    const packageColors = {};
-    packages.forEach((pkg, i) => {
-        packageColors[pkg] = colorPalette[i % colorPalette.length];
-    });
-
-    // Create cycle edge lookup
-    const cycleSet = new Set(data.cycles.map(c => c[0] + '|' + c[1]));
 
     // Helper: get package for a node id
     function getNodePackage(nodeId) {
@@ -510,14 +548,6 @@
         }
     ];
 
-    // Initialize Cytoscape
-    let cy = cytoscape({
-        container: document.getElementById('graph'),
-        elements: buildElements(),
-        style: cyStyle,
-        layout: { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80 }
-    });
-
     // Track state
     let matchedNodeIds = new Set();
     let neighborNodeIds = new Set();
@@ -578,17 +608,17 @@
         const pkg = node.data('package') || '(root)';
         const { imports, importedBy } = getConnections(nodeId);
         document.getElementById('info').innerHTML = `
-            <h4>${nodeId}</h4>
+            <h4>${escapeHtml(nodeId)}</h4>
             <div class="info-section">
-                <strong>Package:</strong> ${pkg}
+                <strong>Package:</strong> ${escapeHtml(pkg)}
             </div>
             <div class="info-section">
                 <strong>Imports (${imports.length}):</strong>
-                <ul>${imports.map(i => '<li>' + i + '</li>').join('') || '<li>None</li>'}</ul>
+                <ul>${imports.map(i => '<li>' + escapeHtml(i) + '</li>').join('') || '<li>None</li>'}</ul>
             </div>
             <div class="info-section">
                 <strong>Imported by (${importedBy.length}):</strong>
-                <ul>${importedBy.map(i => '<li>' + i + '</li>').join('') || '<li>None</li>'}</ul>
+                <ul>${importedBy.map(i => '<li>' + escapeHtml(i) + '</li>').join('') || '<li>None</li>'}</ul>
             </div>
         `;
     }
@@ -686,93 +716,96 @@
         document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
     }
 
-    // Hover events
-    cy.on('mouseover', 'node', function(evt) {
-        const action = document.getElementById('hover-action').value;
-        if (action === 'none') return;
-        if (focusedNodeId) return; // don't override focus
-        if (selectedNodeId) return; // don't override click selection
+    // Cytoscape event handlers (cy exists only after init)
+    function bindGraphEvents() {
+        // Hover events
+        cy.on('mouseover', 'node', function(evt) {
+            const action = document.getElementById('hover-action').value;
+            if (action === 'none') return;
+            if (focusedNodeId) return; // don't override focus
+            if (selectedNodeId) return; // don't override click selection
 
-        const nodeId = evt.target.id();
-        if (action === 'highlight') {
-            applyHighlight(nodeId, false);
-        } else if (action === 'focus') {
-            applyFocus(nodeId);
-        }
-        updateInfoPanel(nodeId);
-    });
-
-    cy.on('mouseout', 'node', function(evt) {
-        const action = document.getElementById('hover-action').value;
-        if (action === 'none') return;
-        if (focusedNodeId) return; // don't clear focus
-        if (selectedNodeId) return; // don't clear click selection
-
-        if (action === 'highlight') {
-            cy.nodes().removeClass('highlight-dim selected');
-            cy.edges().removeClass('highlight-dim');
-        } else if (action === 'focus') {
-            clearFocus();
-        }
-        document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
-    });
-
-    // Click events
-    cy.on('tap', 'node', function(evt) {
-        const nodeId = evt.target.id();
-
-        // Clicking collapsed package node expands it
-        if (nodeId.startsWith('pkg:')) {
-            const pkg = nodeId.substring(4);
-            togglePackageCollapse(pkg);
-            return;
-        }
-
-        // Shift+click to remove node
-        if (evt.originalEvent.shiftKey) {
-            removeNode(nodeId);
-            return;
-        }
-
-        const action = document.getElementById('click-action').value;
-        if (action === 'none') return;
-
-        // Toggle: clicking selected node deselects it but keeps soft-selected
-        if (selectedNodeId === nodeId) {
-            // Set soft-selected BEFORE clearing so runLayout can center on it
-            softSelectedNodeId = nodeId;
-            if (action === 'focus') {
-                clearFocus();
-            } else {
-                clearHighlight();
+            const nodeId = evt.target.id();
+            if (action === 'highlight') {
+                applyHighlight(nodeId, false);
+            } else if (action === 'focus') {
+                applyFocus(nodeId);
             }
-            // Apply visual soft-selected class (centering handled by runLayout)
-            setSoftSelection(nodeId, false);
-            return;
-        }
+            updateInfoPanel(nodeId);
+        });
 
-        // Clicking a new node clears soft selection
-        clearSoftSelection();
+        cy.on('mouseout', 'node', function(evt) {
+            const action = document.getElementById('hover-action').value;
+            if (action === 'none') return;
+            if (focusedNodeId) return; // don't clear focus
+            if (selectedNodeId) return; // don't clear click selection
 
-        if (action === 'highlight') {
-            focusedNodeId = nodeId; // lock highlight
-            applyHighlight(nodeId, true);
-        } else if (action === 'focus') {
-            applyFocus(nodeId);
-        }
-        updateInfoPanel(nodeId);
-    });
-
-    // Click background to reset
-    cy.on('tap', function(evt) {
-        if (evt.target === cy) {
-            clearSoftSelection();
-            if (focusedNodeId) {
+            if (action === 'highlight') {
+                cy.nodes().removeClass('highlight-dim selected');
+                cy.edges().removeClass('highlight-dim');
+            } else if (action === 'focus') {
                 clearFocus();
             }
             document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
-        }
-    });
+        });
+
+        // Click events
+        cy.on('tap', 'node', function(evt) {
+            const nodeId = evt.target.id();
+
+            // Clicking collapsed package node expands it
+            if (nodeId.startsWith('pkg:')) {
+                const pkg = nodeId.substring(4);
+                togglePackageCollapse(pkg);
+                return;
+            }
+
+            // Shift+click to remove node
+            if (evt.originalEvent.shiftKey) {
+                removeNode(nodeId);
+                return;
+            }
+
+            const action = document.getElementById('click-action').value;
+            if (action === 'none') return;
+
+            // Toggle: clicking selected node deselects it but keeps soft-selected
+            if (selectedNodeId === nodeId) {
+                // Set soft-selected BEFORE clearing so runLayout can center on it
+                softSelectedNodeId = nodeId;
+                if (action === 'focus') {
+                    clearFocus();
+                } else {
+                    clearHighlight();
+                }
+                // Apply visual soft-selected class (centering handled by runLayout)
+                setSoftSelection(nodeId, false);
+                return;
+            }
+
+            // Clicking a new node clears soft selection
+            clearSoftSelection();
+
+            if (action === 'highlight') {
+                focusedNodeId = nodeId; // lock highlight
+                applyHighlight(nodeId, true);
+            } else if (action === 'focus') {
+                applyFocus(nodeId);
+            }
+            updateInfoPanel(nodeId);
+        });
+
+        // Click background to reset
+        cy.on('tap', function(evt) {
+            if (evt.target === cy) {
+                clearSoftSelection();
+                if (focusedNodeId) {
+                    clearFocus();
+                }
+                document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
+            }
+        });
+    }
 
     document.getElementById('reset-btn').onclick = () => {
         focusedNodeId = null;
@@ -788,17 +821,19 @@
 
     // Package filters
     const filtersDiv = document.getElementById('package-filters');
-    packages.forEach(pkg => {
-        const div = document.createElement('div');
-        div.className = 'package-filter';
-        div.innerHTML = `
-            <input type="checkbox" checked data-package="${pkg}">
-            <span class="color-dot" style="background:${packageColors[pkg]}"></span>
-            <span style="flex:1">${pkg || '(root)'}</span>
-            <button class="collapse-btn" data-package="${pkg}" title="Collapse package">◇</button>
-        `;
-        filtersDiv.appendChild(div);
-    });
+    function renderPackageFilters() {
+        packages.forEach(pkg => {
+            const div = document.createElement('div');
+            div.className = 'package-filter';
+            div.innerHTML = `
+                <input type="checkbox" checked data-package="${escapeHtml(pkg)}">
+                <span class="color-dot" style="background:${packageColors[pkg]}"></span>
+                <span style="flex:1">${escapeHtml(pkg || '(root)')}</span>
+                <button class="collapse-btn" data-package="${escapeHtml(pkg)}" title="Collapse package">◇</button>
+            `;
+            filtersDiv.appendChild(div);
+        });
+    }
 
     filtersDiv.addEventListener('change', (e) => {
         if (e.target.type === 'checkbox') updateVisibility();
@@ -810,8 +845,6 @@
         }
     });
 
-    // Initialize collapse button states
-    updateCollapseButtons();
     document.getElementById('search').addEventListener('input', updateVisibility);
 
     function updateVisibility() {
@@ -871,11 +904,76 @@
         runLayout(document.getElementById('layout-select').value);
     }
 
-    // Initialize removed nodes panel and apply filters
-    renderRemovedNodes();
-    if (removedNodeIds.size > 0 || collapsedPackages.size > 0) {
-        updateVisibility();
+    // Build the graph UI for import_deps results. Called once per page load.
+    function init(graphResults) {
+        data = buildGraph(graphResults);
+        packages = [...new Set(data.nodes.map(n => n.package))].sort();
+        packages.forEach((pkg, i) => {
+            packageColors[pkg] = colorPalette[i % colorPalette.length];
+        });
+        cycleSet = new Set(data.cycles.map(c => c[0] + '|' + c[1]));
+
+        const datasetId = hashString(data.nodes.map(n => n.id).sort().join('\n'));
+        storageKey = 'deps-viz-removed-nodes:' + datasetId;
+        collapsedKey = 'deps-viz-collapsed-packages:' + datasetId;
+        removedNodeIds = new Set(JSON.parse(sessionStorage.getItem(storageKey) || '[]'));
+        collapsedPackages = new Set(JSON.parse(sessionStorage.getItem(collapsedKey) || '[]'));
+
+        document.getElementById('empty-state').style.display = 'none';
+        document.getElementById('graph').style.display = '';
+        renderPackageFilters();
+        updateCollapseButtons();
+        renderRemovedNodes();
+
+        cy = cytoscape({
+            container: document.getElementById('graph'),
+            elements: buildElements(),
+            style: cyStyle,
+            layout: { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80 }
+        });
+        bindGraphEvents();
+        if (removedNodeIds.size > 0 || collapsedPackages.size > 0) {
+            updateVisibility();
+        }
     }
+
+    // URL fragment "d=<base64url(deflate-raw(json))>", see deps_viz.encode_fragment()
+    async function decodeFragment(encoded) {
+        const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+        const bytes = Uint8Array.from(atob(padded), ch => ch.charCodeAt(0));
+        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        return JSON.parse(await new Response(stream).text());
+    }
+
+    function loadFile(file) {
+        if (!file || data) return;
+        file.text().then(text => init(JSON.parse(text)));
+    }
+
+    // Empty state: pick or drop an import_deps JSON file
+    document.getElementById('file-input').addEventListener('change', (e) => loadFile(e.target.files[0]));
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        loadFile(e.dataTransfer.files[0]);
+    });
+
+    // Data source: embedded by deps_viz > URL fragment > empty state
+    async function start() {
+        if (results) {
+            init(results);
+            return;
+        }
+        const encoded = new URLSearchParams(location.hash.slice(1)).get('d');
+        if (encoded) {
+            init(await decodeFragment(encoded));
+            return;
+        }
+        document.getElementById('graph').style.display = 'none';
+        document.getElementById('empty-state').style.display = 'flex';
+    }
+    start();
     </script>
 </body>
 </html>
