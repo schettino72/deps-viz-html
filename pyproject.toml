@@ -1,0 +1,12 @@
+[project]
+name = "deps-viz"
+version = "0.1.0"
+description = "Interactive HTML visualization for Python import dependencies"
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest", "playwright"]
+
+[tool.uv]
+package = false
