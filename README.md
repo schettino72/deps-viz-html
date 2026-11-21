@@ -8,10 +8,10 @@ Takes JSON output from `import_deps` and generates a self-contained HTML file wi
 
 ```bash
 # Pipe from import_deps
-python -m import_deps app tests --json | python deps_viz.py > deps.html
+python -m import_deps app tests --json | python -m deps_viz > deps.html
 
 # Or from a saved JSON file
-python deps_viz.py < deps.json > deps.html
+python -m deps_viz < deps.json > deps.html
 ```
 
 Then open `deps.html` in a browser.

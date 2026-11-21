@@ -180,7 +180,67 @@
         <div id="graph"></div>
     </div>
     <script>
-    const data = /*GRAPH_DATA*/null;
+    // import_deps JSON: [{module, imports: [module, ...]}, ...]
+    const results = /*GRAPH_DATA*/null;
+
+    // Edges on a cycle: both ends in the same strongly connected component (Tarjan)
+    function findCycleEdges(links) {
+        const adjacency = new Map();
+        links.forEach(l => {
+            if (!adjacency.has(l.source)) adjacency.set(l.source, []);
+            adjacency.get(l.source).push(l.target);
+        });
+
+        const index = new Map();
+        const lowlink = new Map();
+        const component = new Map();
+        const stack = [];
+        const onStack = new Set();
+        let counter = 0;
+
+        function visit(nodeId) {
+            index.set(nodeId, counter);
+            lowlink.set(nodeId, counter);
+            counter++;
+            stack.push(nodeId);
+            onStack.add(nodeId);
+            (adjacency.get(nodeId) || []).forEach(next => {
+                if (!index.has(next)) {
+                    visit(next);
+                    lowlink.set(nodeId, Math.min(lowlink.get(nodeId), lowlink.get(next)));
+                } else if (onStack.has(next)) {
+                    lowlink.set(nodeId, Math.min(lowlink.get(nodeId), index.get(next)));
+                }
+            });
+            if (lowlink.get(nodeId) === index.get(nodeId)) {
+                let member;
+                do {
+                    member = stack.pop();
+                    onStack.delete(member);
+                    component.set(member, nodeId);
+                } while (member !== nodeId);
+            }
+        }
+
+        adjacency.forEach((_, nodeId) => {
+            if (!index.has(nodeId)) visit(nodeId);
+        });
+
+        return links
+            .filter(l => component.has(l.source) && component.get(l.source) === component.get(l.target))
+            .map(l => [l.source, l.target]);
+    }
+
+    function buildGraph(results) {
+        const nodes = results.map(res => {
+            const pkg = res.module.includes('.') ? res.module.slice(0, res.module.lastIndexOf('.')) : '';
+            return { id: res.module, package: pkg };
+        });
+        const links = results.flatMap(res => res.imports.map(imp => ({ source: res.module, target: imp })));
+        return { nodes, links, cycles: findCycleEdges(links) };
+    }
+
+    const data = buildGraph(results);
 
     // Removed nodes (persisted in sessionStorage)
     const STORAGE_KEY = 'deps-viz-removed-nodes';
