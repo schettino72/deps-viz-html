@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Import Dependencies</title>
+    <script src="https://unpkg.com/cytoscape@3.35.0/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@4.1.0/dist/cytoscape-dagre.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        #container { display: flex; height: 100vh; }
+        #sidebar {
+            width: 280px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-right: 1px solid #ddd;
+            overflow-y: auto;
+        }
+        #graph { flex: 1; overflow: hidden; }
+        h3 { margin-bottom: 10px; color: #333; font-size: 14px; }
+        #search, #layout-select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .filter-section { margin-bottom: 20px; }
+        .package-filter {
+            display: flex;
+            align-items: center;
+            padding: 4px 0;
+            font-size: 13px;
+        }
+        .package-filter input[type="checkbox"] { margin-right: 8px; }
+        .package-filter .collapse-btn {
+            margin-left: auto;
+            padding: 0 4px;
+            font-size: 10px;
+            background: #ddd;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .package-filter .collapse-btn:hover { background: #ccc; }
+        .package-filter .collapse-btn.collapsed { background: #3498db; color: white; }
+        .color-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+        #info {
+            background: white;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+            font-size: 12px;
+        }
+        #info h4 { margin-bottom: 8px; color: #2c3e50; }
+        #info ul { margin-left: 18px; margin-top: 5px; }
+        #info li { margin: 3px 0; }
+        .info-section { margin-top: 10px; }
+        .legend { margin-top: 20px; font-size: 12px; }
+        .legend-item { display: flex; align-items: center; margin: 5px 0; }
+        #reset-btn {
+            width: 100%;
+            padding: 8px;
+            margin-top: 10px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        #reset-btn:hover { background: #2980b9; }
+        .interaction-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .interaction-row label {
+            width: 50px;
+            font-size: 13px;
+        }
+        .interaction-row select {
+            flex: 1;
+            padding: 4px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        #removed-nodes {
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .removed-node {
+            display: flex;
+            align-items: center;
+            padding: 3px 0;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .removed-node:hover {
+            background: #e8e8e8;
+        }
+        .removed-node .restore-btn {
+            margin-right: 6px;
+            color: #27ae60;
+            font-weight: bold;
+        }
+        #removed-count {
+            font-size: 11px;
+            color: #666;
+            font-weight: normal;
+        }
+        #empty-state {
+            display: none;
+            flex: 1;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: #333;
+        }
+        #empty-state h2 { margin-bottom: 12px; }
+        #empty-state p { margin: 8px 0; font-size: 14px; }
+        #empty-state .hint { color: #888; font-size: 12px; }
+        #empty-state .file-btn { color: #3498db; cursor: pointer; text-decoration: underline; }
+        #empty-state input[type="file"] { display: none; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="sidebar">
+            <div class="filter-section">
+                <h3>Layout</h3>
+                <select id="layout-select">
+                    <option value="dagre-lr">Hierarchical (LR)</option>
+                    <option value="dagre-tb">Hierarchical (TB)</option>
+                    <option value="cose">Force-directed</option>
+                </select>
+            </div>
+            <h3>Search</h3>
+            <input type="text" id="search" placeholder="Filter modules...">
+            <div class="filter-section">
+                <h3>Packages</h3>
+                <div id="package-filters"></div>
+            </div>
+            <button id="reset-btn">Reset View</button>
+            <div class="filter-section">
+                <h3>Removed Nodes <span id="removed-count"></span></h3>
+                <div id="removed-nodes"></div>
+                <button id="restore-all-btn" style="display:none;margin-top:8px;padding:4px 8px;font-size:11px;">Restore All</button>
+            </div>
+            <div id="info">
+                <h4>Module Info</h4>
+                <p>Click a node to see details</p>
+            </div>
+            <div class="legend">
+                <h3>Legend</h3>
+                <div class="legend-item">
+                    <svg width="30" height="12"><line x1="0" y1="6" x2="25" y2="6" stroke="#999" stroke-width="1.5"></line><polygon points="25,3 30,6 25,9" fill="#999"></polygon></svg>
+                    <span style="margin-left:8px">Import</span>
+                </div>
+                <div class="legend-item">
+                    <svg width="30" height="12"><line x1="0" y1="6" x2="25" y2="6" stroke="#e74c3c" stroke-width="2.5"></line><polygon points="25,3 30,6 25,9" fill="#e74c3c"></polygon></svg>
+                    <span style="margin-left:8px">Circular dependency</span>
+                </div>
+            </div>
+            <div class="filter-section">
+                <h3>Interactions</h3>
+                <div class="interaction-row">
+                    <label>Hover:</label>
+                    <select id="hover-action">
+                        <option value="highlight">Highlight</option>
+                        <option value="focus">Focus</option>
+                        <option value="none">None</option>
+                    </select>
+                </div>
+                <div class="interaction-row">
+                    <label>Click:</label>
+                    <select id="click-action">
+                        <option value="focus">Focus</option>
+                        <option value="highlight">Highlight</option>
+                        <option value="none">None</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <div id="empty-state">
+            <div>
+                <h2>Import Dependencies</h2>
+                <p>Drop an <code>import_deps --json</code> file here, or
+                    <label class="file-btn">choose a file<input type="file" id="file-input" accept=".json,application/json"></label></p>
+                <p class="hint">The file is processed in your browser. Nothing is uploaded.</p>
+            </div>
+        </div>
+        <div id="graph"></div>
+    </div>
+    <script>
+    // import_deps JSON: [{module, imports: [module, ...]}, ...]
+    const results = [{"module": "rich.__init__", "imports": ["rich._extension", "rich._inspect", "rich.console"]}, {"module": "rich.__main__", "imports": ["rich.box", "rich.color", "rich.console", "rich.markdown", "rich.measure", "rich.panel", "rich.pretty", "rich.segment", "rich.style", "rich.syntax", "rich.table", "rich.text"]}, {"module": "rich._emoji_codes", "imports": []}, {"module": "rich._emoji_replace", "imports": ["rich._emoji_codes"]}, {"module": "rich._export_format", "imports": []}, {"module": "rich._extension", "imports": ["rich.pretty", "rich.traceback"]}, {"module": "rich._fileno", "imports": []}, {"module": "rich._inspect", "imports": ["rich.console", "rich.control", "rich.highlighter", "rich.jupyter", "rich.panel", "rich.pretty", "rich.table", "rich.text"]}, {"module": "rich._log_render", "imports": ["rich.console", "rich.containers", "rich.table", "rich.text"]}, {"module": "rich._loop", "imports": []}, {"module": "rich._null_file", "imports": []}, {"module": "rich._palettes", "imports": ["rich.palette"]}, {"module": "rich._pick", "imports": []}, {"module": "rich._ratio", "imports": []}, {"module": "rich._spinners", "imports": []}, {"module": "rich._stack", "imports": []}, {"module": "rich._timer", "imports": []}, {"module": "rich._unicode_data.__init__", "imports": ["rich._unicode_data._versions", "rich.cells"]}, {"module": "rich._unicode_data._versions", "imports": []}, {"module": "rich._unicode_data.unicode10-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode11-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode12-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode12-1-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode13-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode14-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode15-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode15-1-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode16-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode17-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode4-1-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode5-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode5-1-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode5-2-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode6-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode6-1-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode6-2-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode6-3-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode7-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode8-0-0", "imports": ["rich.cells"]}, {"module": "rich._unicode_data.unicode9-0-0", "imports": ["rich.cells"]}, {"module": "rich._win32_console", "imports": ["rich.color", "rich.console", "rich.style"]}, {"module": "rich._windows", "imports": ["rich.__init__", "rich._win32_console"]}, {"module": "rich._windows_renderer", "imports": ["rich._win32_console", "rich.segment"]}, {"module": "rich._wrap", "imports": ["rich._loop", "rich.cells", "rich.console"]}, {"module": "rich.abc", "imports": ["rich.text"]}, {"module": "rich.align", "imports": ["rich.console", "rich.constrain", "rich.highlighter", "rich.jupyter", "rich.measure", "rich.panel", "rich.segment", "rich.style"]}, {"module": "rich.ansi", "imports": ["rich.color", "rich.console", "rich.style", "rich.text"]}, {"module": "rich.bar", "imports": ["rich.color", "rich.console", "rich.jupyter", "rich.measure", "rich.segment", "rich.style"]}, {"module": "rich.box", "imports": ["rich._loop", "rich.box", "rich.columns", "rich.console", "rich.panel", "rich.table", "rich.text"]}, {"module": "rich.cells", "imports": ["rich._unicode_data.__init__"]}, {"module": "rich.color", "imports": ["rich._palettes", "rich.color_triplet", "rich.console", "rich.repr", "rich.style", "rich.table", "rich.terminal_theme", "rich.text"]}, {"module": "rich.color_triplet", "imports": []}, {"module": "rich.columns", "imports": ["rich.align", "rich.console", "rich.constrain", "rich.jupyter", "rich.measure", "rich.padding", "rich.table", "rich.text"]}, {"module": "rich.console", "imports": ["rich._emoji_replace", "rich._export_format", "rich._fileno", "rich._log_render", "rich._null_file", "rich._win32_console", "rich._windows", "rich._windows_renderer", "rich.align", "rich.cells", "rich.color", "rich.control", "rich.emoji", "rich.errors", "rich.highlighter", "rich.json", "rich.jupyter", "rich.live", "rich.markup", "rich.measure", "rich.pager", "rich.pretty", "rich.protocol", "rich.region", "rich.rule", "rich.scope", "rich.screen", "rich.segment", "rich.status", "rich.style", "rich.styled", "rich.terminal_theme", "rich.text", "rich.theme", "rich.themes", "rich.traceback"]}, {"module": "rich.constrain", "imports": ["rich.console", "rich.jupyter", "rich.measure"]}, {"module": "rich.containers", "imports": ["rich.cells", "rich.console", "rich.measure", "rich.text"]}, {"module": "rich.control", "imports": ["rich.console", "rich.segment"]}, {"module": "rich.default_styles", "imports": ["rich.console", "rich.style", "rich.table", "rich.text"]}, {"module": "rich.diagnose", "imports": ["rich.__init__", "rich.console", "rich.panel", "rich.pretty"]}, {"module": "rich.emoji", "imports": ["rich._emoji_codes", "rich._emoji_replace", "rich.columns", "rich.console", "rich.jupyter", "rich.segment", "rich.style"]}, {"module": "rich.errors", "imports": []}, {"module": "rich.file_proxy", "imports": ["rich.ansi", "rich.console", "rich.text"]}, {"module": "rich.filesize", "imports": []}, {"module": "rich.highlighter", "imports": ["rich.console", "rich.text"]}, {"module": "rich.json", "imports": ["rich.console", "rich.highlighter", "rich.text"]}, {"module": "rich.jupyter", "imports": ["rich.__init__", "rich.console", "rich.segment", "rich.terminal_theme"]}, {"module": "rich.layout", "imports": ["rich._ratio", "rich.align", "rich.console", "rich.highlighter", "rich.panel", "rich.pretty", "rich.region", "rich.repr", "rich.segment", "rich.style", "rich.styled", "rich.table", "rich.tree"]}, {"module": "rich.live", "imports": ["rich.__init__", "rich.align", "rich.console", "rich.control", "rich.file_proxy", "rich.jupyter", "rich.live", "rich.live_render", "rich.panel", "rich.rule", "rich.screen", "rich.syntax", "rich.table", "rich.text"]}, {"module": "rich.live_render", "imports": ["rich._loop", "rich.console", "rich.control", "rich.segment", "rich.style", "rich.text"]}, {"module": "rich.logging", "imports": ["rich.__init__", "rich._log_render", "rich._null_file", "rich.console", "rich.highlighter", "rich.text", "rich.traceback"]}, {"module": "rich.markdown", "imports": ["rich._loop", "rich._stack", "rich.box", "rich.console", "rich.containers", "rich.jupyter", "rich.rule", "rich.segment", "rich.style", "rich.syntax", "rich.table", "rich.text"]}, {"module": "rich.markup", "imports": ["rich.__init__", "rich._emoji_replace", "rich.emoji", "rich.errors", "rich.style", "rich.table", "rich.text"]}, {"module": "rich.measure", "imports": ["rich.console", "rich.errors", "rich.protocol"]}, {"module": "rich.padding", "imports": ["rich.__init__", "rich.console", "rich.jupyter", "rich.measure", "rich.segment", "rich.style"]}, {"module": "rich.pager", "imports": ["rich.__main__", "rich.console"]}, {"module": "rich.palette", "imports": ["rich.color", "rich.color_triplet", "rich.console", "rich.segment", "rich.style", "rich.table", "rich.text"]}, {"module": "rich.panel", "imports": ["rich.align", "rich.box", "rich.cells", "rich.console", "rich.jupyter", "rich.measure", "rich.padding", "rich.segment", "rich.style", "rich.text"]}, {"module": "rich.pretty", "imports": ["rich.__init__", "rich._loop", "rich._pick", "rich.abc", "rich.cells", "rich.console", "rich.highlighter", "rich.jupyter", "rich.measure", "rich.repr", "rich.text"]}, {"module": "rich.progress", "imports": ["rich.__init__", "rich.console", "rich.filesize", "rich.highlighter", "rich.jupyter", "rich.live", "rich.panel", "rich.progress_bar", "rich.rule", "rich.spinner", "rich.style", "rich.syntax", "rich.table", "rich.text"]}, {"module": "rich.progress_bar", "imports": ["rich.color", "rich.color_triplet", "rich.console", "rich.jupyter", "rich.measure", "rich.segment", "rich.style"]}, {"module": "rich.prompt", "imports": ["rich.__init__", "rich.console", "rich.text"]}, {"module": "rich.protocol", "imports": ["rich.console"]}, {"module": "rich.region", "imports": []}, {"module": "rich.repr", "imports": ["rich.console"]}, {"module": "rich.rule", "imports": ["rich.align", "rich.cells", "rich.console", "rich.jupyter", "rich.measure", "rich.style", "rich.text"]}, {"module": "rich.scope", "imports": ["rich.__init__", "rich.console", "rich.highlighter", "rich.panel", "rich.pretty", "rich.table", "rich.text"]}, {"module": "rich.screen", "imports": ["rich._loop", "rich.console", "rich.segment", "rich.style"]}, {"module": "rich.segment", "imports": ["rich.cells", "rich.console", "rich.repr", "rich.style", "rich.syntax", "rich.text"]}, {"module": "rich.spinner", "imports": ["rich._spinners", "rich.console", "rich.live", "rich.measure", "rich.style", "rich.table", "rich.text"]}, {"module": "rich.status", "imports": ["rich.console", "rich.jupyter", "rich.live", "rich.spinner", "rich.style"]}, {"module": "rich.style", "imports": ["rich.color", "rich.errors", "rich.repr", "rich.terminal_theme"]}, {"module": "rich.styled", "imports": ["rich.__init__", "rich.console", "rich.measure", "rich.panel", "rich.segment", "rich.style"]}, {"module": "rich.syntax", "imports": ["rich._loop", "rich.cells", "rich.color", "rich.console", "rich.containers", "rich.jupyter", "rich.measure", "rich.padding", "rich.segment", "rich.style", "rich.text"]}, {"module": "rich.table", "imports": ["rich._loop", "rich._pick", "rich._ratio", "rich._timer", "rich.align", "rich.box", "rich.console", "rich.errors", "rich.highlighter", "rich.jupyter", "rich.measure", "rich.padding", "rich.protocol", "rich.segment", "rich.style", "rich.text"]}, {"module": "rich.terminal_theme", "imports": ["rich.color_triplet", "rich.palette"]}, {"module": "rich.text", "imports": ["rich._loop", "rich._pick", "rich._wrap", "rich.align", "rich.ansi", "rich.cells", "rich.console", "rich.containers", "rich.control", "rich.emoji", "rich.jupyter", "rich.markup", "rich.measure", "rich.segment", "rich.style"]}, {"module": "rich.theme", "imports": ["rich.default_styles", "rich.style"]}, {"module": "rich.themes", "imports": ["rich.default_styles", "rich.theme"]}, {"module": "rich.traceback", "imports": ["rich.__init__", "rich._loop", "rich.columns", "rich.console", "rich.constrain", "rich.highlighter", "rich.panel", "rich.pretty", "rich.scope", "rich.style", "rich.syntax", "rich.text", "rich.theme"]}, {"module": "rich.tree", "imports": ["rich._loop", "rich.console", "rich.jupyter", "rich.markdown", "rich.measure", "rich.panel", "rich.segment", "rich.style", "rich.styled", "rich.syntax", "rich.table"]}];
+
+    // Edges on a cycle: both ends in the same strongly connected component (Tarjan)
+    function findCycleEdges(links) {
+        const adjacency = new Map();
+        links.forEach(l => {
+            if (!adjacency.has(l.source)) adjacency.set(l.source, []);
+            adjacency.get(l.source).push(l.target);
+        });
+
+        const index = new Map();
+        const lowlink = new Map();
+        const component = new Map();
+        const stack = [];
+        const onStack = new Set();
+        let counter = 0;
+
+        function visit(nodeId) {
+            index.set(nodeId, counter);
+            lowlink.set(nodeId, counter);
+            counter++;
+            stack.push(nodeId);
+            onStack.add(nodeId);
+            (adjacency.get(nodeId) || []).forEach(next => {
+                if (!index.has(next)) {
+                    visit(next);
+                    lowlink.set(nodeId, Math.min(lowlink.get(nodeId), lowlink.get(next)));
+                } else if (onStack.has(next)) {
+                    lowlink.set(nodeId, Math.min(lowlink.get(nodeId), index.get(next)));
+                }
+            });
+            if (lowlink.get(nodeId) === index.get(nodeId)) {
+                let member;
+                do {
+                    member = stack.pop();
+                    onStack.delete(member);
+                    component.set(member, nodeId);
+                } while (member !== nodeId);
+            }
+        }
+
+        adjacency.forEach((_, nodeId) => {
+            if (!index.has(nodeId)) visit(nodeId);
+        });
+
+        return links
+            .filter(l => component.has(l.source) && component.get(l.source) === component.get(l.target))
+            .map(l => [l.source, l.target]);
+    }
+
+    function buildGraph(results) {
+        const nodes = results.map(res => {
+            const pkg = res.module.includes('.') ? res.module.slice(0, res.module.lastIndexOf('.')) : '';
+            return { id: res.module, package: pkg };
+        });
+        const links = results.flatMap(res => res.imports.map(imp => ({ source: res.module, target: imp })));
+        return { nodes, links, cycles: findCycleEdges(links) };
+    }
+
+    // Text from the data must never be interpreted as HTML
+    function escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // Short stable hash, used to key sessionStorage per dataset
+    function hashString(text) {
+        let hash = 0x811c9dc5;  // FNV-1a
+        for (let i = 0; i < text.length; i++) {
+            hash ^= text.charCodeAt(i);
+            hash = Math.imul(hash, 0x01000193);
+        }
+        return (hash >>> 0).toString(16);
+    }
+
+    // Graph state, set by init()
+    let data = null;
+    let packages = [];
+    const packageColors = {};
+    let cycleSet = new Set();
+    let cy = null;
+
+    // Removed nodes and collapsed packages (persisted in sessionStorage, per dataset)
+    let storageKey = null;
+    let collapsedKey = null;
+    let removedNodeIds = new Set();
+    let collapsedPackages = new Set();
+
+    function saveRemovedNodes() {
+        sessionStorage.setItem(storageKey, JSON.stringify([...removedNodeIds]));
+    }
+
+    function removeNode(nodeId) {
+        removedNodeIds.add(nodeId);
+        saveRemovedNodes();
+        renderRemovedNodes();
+        // Clear selection if removing selected node
+        if (selectedNodeId === nodeId) selectedNodeId = null;
+        if (softSelectedNodeId === nodeId) softSelectedNodeId = null;
+        if (focusedNodeId === nodeId) focusedNodeId = null;
+        updateVisibility();
+    }
+
+    function restoreNode(nodeId) {
+        removedNodeIds.delete(nodeId);
+        saveRemovedNodes();
+        renderRemovedNodes();
+        updateVisibility();
+    }
+
+    function renderRemovedNodes() {
+        const container = document.getElementById('removed-nodes');
+        const countEl = document.getElementById('removed-count');
+        const restoreAllBtn = document.getElementById('restore-all-btn');
+
+        countEl.textContent = removedNodeIds.size ? `(${removedNodeIds.size})` : '';
+        restoreAllBtn.style.display = removedNodeIds.size > 1 ? 'inline-block' : 'none';
+
+        if (removedNodeIds.size === 0) {
+            container.innerHTML = '<div style="font-size:11px;color:#888;">Shift+click to remove</div>';
+            return;
+        }
+
+        container.innerHTML = [...removedNodeIds].sort().map(id => `
+            <div class="removed-node" data-node="${escapeHtml(id)}">
+                <span class="restore-btn">+</span>
+                <span>${escapeHtml(id)}</span>
+            </div>
+        `).join('');
+    }
+
+    function restoreAllNodes() {
+        removedNodeIds.clear();
+        saveRemovedNodes();
+        renderRemovedNodes();
+        updateVisibility();
+    }
+
+    document.getElementById('removed-nodes').addEventListener('click', (e) => {
+        const item = e.target.closest('.removed-node');
+        if (item) restoreNode(item.dataset.node);
+    });
+
+    document.getElementById('restore-all-btn').addEventListener('click', restoreAllNodes);
+
+    // Collapsed packages
+    function saveCollapsedPackages() {
+        sessionStorage.setItem(collapsedKey, JSON.stringify([...collapsedPackages]));
+    }
+
+    function togglePackageCollapse(pkg) {
+        if (collapsedPackages.has(pkg)) {
+            collapsedPackages.delete(pkg);
+        } else {
+            collapsedPackages.add(pkg);
+        }
+        saveCollapsedPackages();
+        updateCollapseButtons();
+        updateVisibility();
+    }
+
+    function updateCollapseButtons() {
+        document.querySelectorAll('.collapse-btn').forEach(btn => {
+            const pkg = btn.dataset.package;
+            btn.classList.toggle('collapsed', collapsedPackages.has(pkg));
+            btn.textContent = collapsedPackages.has(pkg) ? '◆' : '◇';
+            btn.title = collapsedPackages.has(pkg) ? 'Expand package' : 'Collapse package';
+        });
+    }
+
+    // Color palette for packages (lighter, more readable with dark text)
+    const colorPalette = [
+        '#7cb5ec', '#f7a35c', '#90ed7d', '#8085e9', '#f15c80',
+        '#e4d354', '#2b908f', '#f45b5b', '#91e8e1', '#c4a4e0'
+    ];
+
+    // Helper: get package for a node id
+    function getNodePackage(nodeId) {
+        const node = data.nodes.find(n => n.id === nodeId);
+        return node ? node.package : '';
+    }
+
+    // Helper: map node id to collapsed package node if applicable
+    function mapToCollapsed(nodeId) {
+        const pkg = getNodePackage(nodeId);
+        if (collapsedPackages.has(pkg)) {
+            return 'pkg:' + pkg;
+        }
+        return nodeId;
+    }
+
+    // Build Cytoscape elements
+    function buildElements(nodeFilter) {
+        const visibleNodeIds = nodeFilter ? nodeFilter : new Set(data.nodes.map(n => n.id));
+
+        const nodes = [];
+        const addedCollapsedPkgs = new Set();
+
+        data.nodes.forEach(n => {
+            if (!visibleNodeIds.has(n.id) || removedNodeIds.has(n.id)) return;
+
+            if (collapsedPackages.has(n.package)) {
+                // Add collapsed package node once
+                if (!addedCollapsedPkgs.has(n.package)) {
+                    addedCollapsedPkgs.add(n.package);
+                    nodes.push({
+                        data: {
+                            id: 'pkg:' + n.package,
+                            label: n.package + ' ⊞',
+                            package: n.package,
+                            isCollapsed: true
+                        }
+                    });
+                }
+            } else {
+                nodes.push({
+                    data: {
+                        id: n.id,
+                        label: n.id.split('.').pop(),
+                        package: n.package
+                    }
+                });
+            }
+        });
+
+        // Build edges with deduplication for collapsed packages
+        const edgeMap = new Map();
+        data.links.forEach(l => {
+            if (!visibleNodeIds.has(l.source) || !visibleNodeIds.has(l.target)) return;
+            if (removedNodeIds.has(l.source) || removedNodeIds.has(l.target)) return;
+
+            const source = mapToCollapsed(l.source);
+            const target = mapToCollapsed(l.target);
+
+            // Skip self-loops on collapsed packages
+            if (source === target && source.startsWith('pkg:')) return;
+
+            const edgeKey = source + '->' + target;
+            if (!edgeMap.has(edgeKey)) {
+                edgeMap.set(edgeKey, {
+                    data: {
+                        id: edgeKey,
+                        source: source,
+                        target: target,
+                        isCycle: cycleSet.has(l.source + '|' + l.target)
+                    },
+                    classes: cycleSet.has(l.source + '|' + l.target) ? 'cycle' : ''
+                });
+            }
+        });
+
+        return { nodes, edges: [...edgeMap.values()] };
+    }
+
+    // Cytoscape style
+    const cyStyle = [
+        {
+            selector: 'node',
+            style: {
+                'label': 'data(label)',
+                'text-valign': 'center',
+                'text-halign': 'center',
+                'background-color': node => packageColors[node.data('package')] || '#999',
+                'border-width': 1,
+                'border-color': '#333',
+                'shape': 'roundrectangle',
+                'width': node => Math.max(60, node.data('label').length * 8 + 16),
+                'height': 28,
+                'font-size': 11,
+                'color': '#000',
+                'transition-property': 'border-width, border-color, opacity, shadow-blur, shadow-opacity',
+                'transition-duration': '0.2s'
+            }
+        },
+        {
+            selector: 'node.matched',
+            style: {
+                'border-width': 3,
+                'border-color': '#000'
+            }
+        },
+        {
+            selector: 'node.neighbor',
+            style: {
+                'opacity': 0.6
+            }
+        },
+        {
+            selector: 'node.selected',
+            style: {
+                'border-width': 4,
+                'border-color': '#e74c3c',
+                'shadow-blur': 15,
+                'shadow-color': '#e74c3c',
+                'shadow-opacity': 0.8,
+                'shadow-offset-x': 0,
+                'shadow-offset-y': 0
+            }
+        },
+        {
+            selector: 'node.soft-selected',
+            style: {
+                'border-width': 3,
+                'border-color': '#e74c3c',
+                'border-style': 'dashed'
+            }
+        },
+        {
+            selector: 'node.highlight-dim',
+            style: {
+                'opacity': 0.3
+            }
+        },
+        {
+            selector: 'edge',
+            style: {
+                'width': 1.5,
+                'line-color': '#999',
+                'target-arrow-color': '#999',
+                'target-arrow-shape': 'triangle',
+                'curve-style': 'bezier',
+                'arrow-scale': 0.8,
+                'transition-property': 'opacity',
+                'transition-duration': '0.2s'
+            }
+        },
+        {
+            selector: 'edge.cycle',
+            style: {
+                'width': 2.5,
+                'line-color': '#e74c3c',
+                'target-arrow-color': '#e74c3c'
+            }
+        },
+        {
+            selector: 'edge.highlight-dim',
+            style: {
+                'opacity': 0.3
+            }
+        }
+    ];
+
+    // Track state
+    let matchedNodeIds = new Set();
+    let neighborNodeIds = new Set();
+    let focusedNodeId = null;
+
+    // Layout functions
+    function runLayout(name, centerNodeId) {
+        let layoutConfig;
+        if (name === 'dagre-lr') {
+            layoutConfig = { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80, animate: true, animationDuration: 300 };
+        } else if (name === 'dagre-tb') {
+            layoutConfig = { name: 'dagre', rankDir: 'TB', nodeSep: 30, rankSep: 80, animate: true, animationDuration: 300 };
+        } else {
+            layoutConfig = { name: 'cose', animate: true, animationDuration: 300, nodeRepulsion: 8000, idealEdgeLength: 100 };
+        }
+
+        const layout = cy.layout(layoutConfig);
+        layout.on('layoutstop', () => {
+            // Center on: explicit node > soft-selected > fit all
+            const targetNodeId = centerNodeId || softSelectedNodeId;
+            if (targetNodeId) {
+                const node = cy.getElementById(targetNodeId);
+                if (node.length) {
+                    cy.animate({
+                        center: { eles: node },
+                        zoom: Math.min(cy.zoom(), 1.5),
+                        duration: 300,
+                        easing: 'ease-out'
+                    });
+                    return;
+                }
+            }
+            cy.animate({
+                fit: { eles: cy.elements(), padding: 30 },
+                duration: 300,
+                easing: 'ease-out'
+            });
+        });
+        layout.run();
+    }
+
+    // Layout selector
+    document.getElementById('layout-select').addEventListener('change', function() {
+        runLayout(this.value);
+    });
+
+    // Helper: get node connections
+    function getConnections(nodeId) {
+        const imports = data.links.filter(l => l.source === nodeId).map(l => l.target);
+        const importedBy = data.links.filter(l => l.target === nodeId).map(l => l.source);
+        const connected = new Set([nodeId, ...imports, ...importedBy]);
+        return { imports, importedBy, connected };
+    }
+
+    // Helper: update info panel
+    function updateInfoPanel(nodeId) {
+        const node = cy.getElementById(nodeId);
+        const pkg = node.data('package') || '(root)';
+        const { imports, importedBy } = getConnections(nodeId);
+        document.getElementById('info').innerHTML = `
+            <h4>${escapeHtml(nodeId)}</h4>
+            <div class="info-section">
+                <strong>Package:</strong> ${escapeHtml(pkg)}
+            </div>
+            <div class="info-section">
+                <strong>Imports (${imports.length}):</strong>
+                <ul>${imports.map(i => '<li>' + escapeHtml(i) + '</li>').join('') || '<li>None</li>'}</ul>
+            </div>
+            <div class="info-section">
+                <strong>Imported by (${importedBy.length}):</strong>
+                <ul>${importedBy.map(i => '<li>' + escapeHtml(i) + '</li>').join('') || '<li>None</li>'}</ul>
+            </div>
+        `;
+    }
+
+    // Track click-selected node (not hover)
+    let selectedNodeId = null;
+    let softSelectedNodeId = null;
+
+    // Set visual selection on a single node
+    function setVisualSelection(nodeId) {
+        cy.nodes().removeClass('selected');
+        if (nodeId) {
+            const node = cy.getElementById(nodeId);
+            if (node.length) node.addClass('selected');
+        }
+    }
+
+    // Set soft selection (dashed border, visible in full graph)
+    function setSoftSelection(nodeId, centerOn) {
+        cy.nodes().removeClass('soft-selected');
+        softSelectedNodeId = nodeId;
+        if (nodeId) {
+            const node = cy.getElementById(nodeId);
+            if (node.length) {
+                node.addClass('soft-selected');
+                if (centerOn) {
+                    cy.animate({
+                        center: { eles: node },
+                        duration: 300,
+                        easing: 'ease-out'
+                    });
+                }
+            }
+        }
+    }
+
+    // Clear soft selection
+    function clearSoftSelection() {
+        cy.nodes().removeClass('soft-selected');
+        softSelectedNodeId = null;
+    }
+
+    // Apply highlight effect (dim unconnected nodes)
+    function applyHighlight(nodeId, isClick) {
+        if (isClick) selectedNodeId = nodeId;
+        const { connected } = getConnections(nodeId);
+
+        cy.nodes().removeClass('highlight-dim');
+        cy.edges().removeClass('highlight-dim');
+
+        cy.nodes().forEach(n => {
+            if (!connected.has(n.id())) n.addClass('highlight-dim');
+        });
+        cy.edges().forEach(e => {
+            if (e.source().id() !== nodeId && e.target().id() !== nodeId) e.addClass('highlight-dim');
+        });
+
+        setVisualSelection(nodeId);
+    }
+
+    // Clear highlight effects
+    function clearHighlight() {
+        selectedNodeId = null;
+        cy.nodes().removeClass('highlight-dim');
+        cy.edges().removeClass('highlight-dim');
+        setVisualSelection(null);
+    }
+
+    // Apply focus effect (rebuild graph with only connected nodes)
+    function applyFocus(nodeId) {
+        selectedNodeId = nodeId;
+        focusedNodeId = nodeId;
+        const { connected } = getConnections(nodeId);
+
+        const elements = buildElements(connected);
+        cy.json({ elements });
+        setVisualSelection(nodeId);
+        runLayout(document.getElementById('layout-select').value, nodeId);
+    }
+
+    // Clear focus (restore full graph)
+    function clearFocus() {
+        if (!focusedNodeId) return;
+        focusedNodeId = null;
+        selectedNodeId = null;
+        updateVisibility();
+    }
+
+    // Reset all
+    function resetAll() {
+        focusedNodeId = null;
+        selectedNodeId = null;
+        cy.nodes().removeClass('highlight-dim selected');
+        cy.edges().removeClass('highlight-dim');
+        document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
+    }
+
+    // Cytoscape event handlers (cy exists only after init)
+    function bindGraphEvents() {
+        // Hover events
+        cy.on('mouseover', 'node', function(evt) {
+            const action = document.getElementById('hover-action').value;
+            if (action === 'none') return;
+            if (focusedNodeId) return; // don't override focus
+            if (selectedNodeId) return; // don't override click selection
+
+            const nodeId = evt.target.id();
+            if (action === 'highlight') {
+                applyHighlight(nodeId, false);
+            } else if (action === 'focus') {
+                applyFocus(nodeId);
+            }
+            updateInfoPanel(nodeId);
+        });
+
+        cy.on('mouseout', 'node', function(evt) {
+            const action = document.getElementById('hover-action').value;
+            if (action === 'none') return;
+            if (focusedNodeId) return; // don't clear focus
+            if (selectedNodeId) return; // don't clear click selection
+
+            if (action === 'highlight') {
+                cy.nodes().removeClass('highlight-dim selected');
+                cy.edges().removeClass('highlight-dim');
+            } else if (action === 'focus') {
+                clearFocus();
+            }
+            document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
+        });
+
+        // Click events
+        cy.on('tap', 'node', function(evt) {
+            const nodeId = evt.target.id();
+
+            // Clicking collapsed package node expands it
+            if (nodeId.startsWith('pkg:')) {
+                const pkg = nodeId.substring(4);
+                togglePackageCollapse(pkg);
+                return;
+            }
+
+            // Shift+click to remove node
+            if (evt.originalEvent.shiftKey) {
+                removeNode(nodeId);
+                return;
+            }
+
+            const action = document.getElementById('click-action').value;
+            if (action === 'none') return;
+
+            // Toggle: clicking selected node deselects it but keeps soft-selected
+            if (selectedNodeId === nodeId) {
+                // Set soft-selected BEFORE clearing so runLayout can center on it
+                softSelectedNodeId = nodeId;
+                if (action === 'focus') {
+                    clearFocus();
+                } else {
+                    clearHighlight();
+                }
+                // Apply visual soft-selected class (centering handled by runLayout)
+                setSoftSelection(nodeId, false);
+                return;
+            }
+
+            // Clicking a new node clears soft selection
+            clearSoftSelection();
+
+            if (action === 'highlight') {
+                focusedNodeId = nodeId; // lock highlight
+                applyHighlight(nodeId, true);
+            } else if (action === 'focus') {
+                applyFocus(nodeId);
+            }
+            updateInfoPanel(nodeId);
+        });
+
+        // Click background to reset
+        cy.on('tap', function(evt) {
+            if (evt.target === cy) {
+                clearSoftSelection();
+                if (focusedNodeId) {
+                    clearFocus();
+                }
+                document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
+            }
+        });
+    }
+
+    document.getElementById('reset-btn').onclick = () => {
+        focusedNodeId = null;
+        selectedNodeId = null;
+        softSelectedNodeId = null;
+        cy.nodes().removeClass('highlight-dim selected soft-selected');
+        cy.edges().removeClass('highlight-dim');
+        document.getElementById('search').value = '';
+        document.querySelectorAll('#package-filters input').forEach(cb => cb.checked = true);
+        updateVisibility();
+        document.getElementById('info').innerHTML = '<h4>Module Info</h4><p>Click a node to see details</p>';
+    };
+
+    // Package filters
+    const filtersDiv = document.getElementById('package-filters');
+    function renderPackageFilters() {
+        packages.forEach(pkg => {
+            const div = document.createElement('div');
+            div.className = 'package-filter';
+            div.innerHTML = `
+                <input type="checkbox" checked data-package="${escapeHtml(pkg)}">
+                <span class="color-dot" style="background:${packageColors[pkg]}"></span>
+                <span style="flex:1">${escapeHtml(pkg || '(root)')}</span>
+                <button class="collapse-btn" data-package="${escapeHtml(pkg)}" title="Collapse package">◇</button>
+            `;
+            filtersDiv.appendChild(div);
+        });
+    }
+
+    filtersDiv.addEventListener('change', (e) => {
+        if (e.target.type === 'checkbox') updateVisibility();
+    });
+
+    filtersDiv.addEventListener('click', (e) => {
+        if (e.target.classList.contains('collapse-btn')) {
+            togglePackageCollapse(e.target.dataset.package);
+        }
+    });
+
+    document.getElementById('search').addEventListener('input', updateVisibility);
+
+    function updateVisibility() {
+        const searchTerm = document.getElementById('search').value.toLowerCase();
+        const checkedPackages = new Set(
+            [...document.querySelectorAll('#package-filters input:checked')].map(cb => cb.dataset.package)
+        );
+
+        // Find directly matched nodes
+        matchedNodeIds = new Set();
+        data.nodes.forEach(n => {
+            const matchesSearch = searchTerm === '' || n.id.toLowerCase().includes(searchTerm);
+            const matchesPackage = checkedPackages.has(n.package);
+            if (matchesSearch && matchesPackage) {
+                matchedNodeIds.add(n.id);
+            }
+        });
+
+        // Find neighbors of matched nodes
+        neighborNodeIds = new Set();
+        if (searchTerm !== '') {
+            data.links.forEach(l => {
+                if (matchedNodeIds.has(l.source) && !matchedNodeIds.has(l.target)) {
+                    neighborNodeIds.add(l.target);
+                }
+                if (matchedNodeIds.has(l.target) && !matchedNodeIds.has(l.source)) {
+                    neighborNodeIds.add(l.source);
+                }
+            });
+        }
+
+        // Combine matched and neighbor nodes
+        const visibleNodeIds = new Set([...matchedNodeIds, ...neighborNodeIds]);
+
+        // Rebuild graph with visible nodes
+        const elements = buildElements(visibleNodeIds);
+        cy.json({ elements });
+
+        // Apply matched/neighbor styling (clear selected since graph was rebuilt)
+        cy.nodes().forEach(n => {
+            n.removeClass('matched neighbor selected highlight-dim soft-selected');
+            if (matchedNodeIds.has(n.id())) {
+                n.addClass('matched');
+            } else if (neighborNodeIds.has(n.id())) {
+                n.addClass('neighbor');
+            }
+        });
+        cy.edges().removeClass('highlight-dim');
+
+        // Re-apply soft-selected if node is still visible
+        if (softSelectedNodeId) {
+            const node = cy.getElementById(softSelectedNodeId);
+            if (node.length) node.addClass('soft-selected');
+        }
+
+        // Run layout
+        runLayout(document.getElementById('layout-select').value);
+    }
+
+    // Build the graph UI for import_deps results. Called once per page load.
+    function init(graphResults) {
+        data = buildGraph(graphResults);
+        packages = [...new Set(data.nodes.map(n => n.package))].sort();
+        packages.forEach((pkg, i) => {
+            packageColors[pkg] = colorPalette[i % colorPalette.length];
+        });
+        cycleSet = new Set(data.cycles.map(c => c[0] + '|' + c[1]));
+
+        const datasetId = hashString(data.nodes.map(n => n.id).sort().join('\n'));
+        storageKey = 'deps-viz-removed-nodes:' + datasetId;
+        collapsedKey = 'deps-viz-collapsed-packages:' + datasetId;
+        removedNodeIds = new Set(JSON.parse(sessionStorage.getItem(storageKey) || '[]'));
+        collapsedPackages = new Set(JSON.parse(sessionStorage.getItem(collapsedKey) || '[]'));
+
+        document.getElementById('empty-state').style.display = 'none';
+        document.getElementById('graph').style.display = '';
+        renderPackageFilters();
+        updateCollapseButtons();
+        renderRemovedNodes();
+
+        cy = cytoscape({
+            container: document.getElementById('graph'),
+            elements: buildElements(),
+            style: cyStyle,
+            layout: { name: 'dagre', rankDir: 'LR', nodeSep: 30, rankSep: 80 }
+        });
+        bindGraphEvents();
+        if (removedNodeIds.size > 0 || collapsedPackages.size > 0) {
+            updateVisibility();
+        }
+    }
+
+    // URL fragment "d=<base64url(deflate-raw(json))>", see deps_viz.encode_fragment()
+    async function decodeFragment(encoded) {
+        const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+        const bytes = Uint8Array.from(atob(padded), ch => ch.charCodeAt(0));
+        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        return JSON.parse(await new Response(stream).text());
+    }
+
+    function loadFile(file) {
+        if (!file || data) return;
+        file.text().then(text => init(JSON.parse(text)));
+    }
+
+    // Empty state: pick or drop an import_deps JSON file
+    document.getElementById('file-input').addEventListener('change', (e) => loadFile(e.target.files[0]));
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        loadFile(e.dataTransfer.files[0]);
+    });
+
+    // Data source: embedded by deps_viz > URL fragment > empty state
+    async function start() {
+        if (results) {
+            init(results);
+            return;
+        }
+        const encoded = new URLSearchParams(location.hash.slice(1)).get('d');
+        if (encoded) {
+            init(await decodeFragment(encoded));
+            return;
+        }
+        document.getElementById('graph').style.display = 'none';
+        document.getElementById('empty-state').style.display = 'flex';
+    }
+    start();
+    </script>
+</body>
+</html>

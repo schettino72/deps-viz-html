@@ -2,19 +2,34 @@
 
 Interactive HTML visualization for Python import dependencies.
 
-Takes JSON output from `import_deps` and generates a self-contained HTML file with an interactive graph.
+Analyzes your code with `import_deps` and opens an interactive graph in the browser.
 
 ## Usage
 
 ```bash
-# Pipe from import_deps
-python -m import_deps app tests --json | python -m deps_viz > deps.html
+# Analyze and open in browser (writes a temp file in /tmp)
+deps-viz app tests
 
-# Or from a saved JSON file
-python -m deps_viz < deps.json > deps.html
+# Write a self-contained HTML file, then open it in your browser
+deps-viz app tests -o deps.html
+xdg-open deps.html        # Linux; macOS: open deps.html
+
+# Read import_deps JSON from stdin
+import_deps app --json | deps-viz -o deps.html
 ```
 
-Then open `deps.html` in a browser.
+You can also drag `deps.html` into a browser window.
+
+**Snap browsers (default Firefox and Chromium on Ubuntu):** opening directly
+(without `-o`) fails with "file not found", because snaps have a private `/tmp`.
+Use `-o` and keep the HTML file somewhere under your home directory.
+
+## Examples
+
+Open directly in a browser, no install needed:
+
+- [examples/sample.html](examples/sample.html) - small sample (7 modules)
+- [examples/rich.html](examples/rich.html) - the [rich](https://github.com/Textualize/rich) library (100 modules)
 
 ## Features
 
@@ -27,7 +42,7 @@ Then open `deps.html` in a browser.
 
 ## Dependencies
 
-None for the Python script. The generated HTML loads D3.js and dagre from CDN.
+[import_deps](https://github.com/schettino72/import-deps). The HTML loads Cytoscape.js and cytoscape-dagre from CDN.
 
 ## Related
 
