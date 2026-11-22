@@ -2,11 +2,34 @@
 name = "deps-viz"
 version = "0.1.0"
 description = "Interactive HTML visualization for Python import dependencies"
-requires-python = ">=3.10"
+readme = "README.md"
+requires-python = ">=3.12"
 license = {text = "MIT"}
+authors = [
+    {name = "Eduardo Naufel Schettino", email = "schettino72@gmail.com"}
+]
+keywords = ["import", "graph", "visualization", "dependencies"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Quality Assurance",
+]
 dependencies = [
     "import-deps>=0.5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/schettino72/deps-viz-html"
+Repository = "https://github.com/schettino72/deps-viz-html"
+Issues = "https://github.com/schettino72/deps-viz-html/issues"
 
 [dependency-groups]
 dev = [

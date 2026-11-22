@@ -4,6 +4,18 @@ Interactive HTML visualization for Python import dependencies.
 
 Analyzes your code with `import_deps` and opens an interactive graph in the browser.
 
+## Install
+
+```bash
+pip install deps-viz
+
+# or as a standalone command with uv
+uv tool install deps-viz
+
+# or run without installing
+uvx deps-viz app tests
+```
+
 ## Usage
 
 ```bash
@@ -48,10 +60,12 @@ The format is not Python specific: any tool producing this JSON can use deps-viz
 
 ## Examples
 
-Open directly in a browser, no install needed:
+Open in your browser, no install needed:
 
-- [examples/sample.html](examples/sample.html) - small sample (7 modules)
-- [examples/rich.html](examples/rich.html) - the [rich](https://github.com/Textualize/rich) library (100 modules)
+- [sample](https://raw.githack.com/schettino72/deps-viz-html/main/examples/sample.html) - small sample (7 modules)
+- [rich](https://raw.githack.com/schettino72/deps-viz-html/main/examples/rich.html) - the [rich](https://github.com/Textualize/rich) library (100 modules)
+
+Source files are in [examples/](https://github.com/schettino72/deps-viz-html/tree/main/examples).
 
 ## Features
 
