@@ -3,6 +3,7 @@ name = "deps-viz"
 version = "0.1.0"
 description = "Interactive HTML visualization for Python import dependencies"
 requires-python = ">=3.10"
+license = {text = "MIT"}
 dependencies = [
     "import-deps>=0.5",
 ]

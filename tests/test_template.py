@@ -27,6 +27,12 @@ OTHER_DATA = [
     {"module": "other.y", "imports": []},
 ]
 
+# imports of modules not in the list (stdlib, 3rd party) are ignored
+EXTERNAL_IMPORT_DATA = [
+    {"module": "pkg.a", "imports": ["pkg.b", "os.path", "requests"]},
+    {"module": "pkg.b", "imports": []},
+]
+
 # names with HTML must be rendered as text, never as markup
 HTML_NAME_DATA = [
     {"module": "pk<b>g.mod", "imports": []},
@@ -80,6 +86,12 @@ class TestRender(BrowserTestCase):
         self.assertEqual(self.errors, [])
         self.assertEqual(self.page.evaluate('cy.nodes().length'), 7)
         self.assertEqual(self.page.evaluate('cy.edges().length'), 5)
+
+    def test_external_imports_ignored(self):
+        self.open_graph(EXTERNAL_IMPORT_DATA)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(self.page.evaluate('cy.nodes().map(n => n.id()).sort()'), ['pkg.a', 'pkg.b'])
+        self.assertEqual(self.page.evaluate('cy.edges().map(e => e.id())'), ['pkg.a->pkg.b'])
 
     def test_cycle_edges(self):
         self.open_graph(CYCLE_DATA)
