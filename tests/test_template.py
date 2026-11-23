@@ -200,3 +200,56 @@ class TestHostedViewer(BrowserTestCase):
         self.assertEqual(self.errors, [])
         self.assertEqual(self.page.evaluate('cy.nodes().length'), 7)
         self.assertFalse(self.page.is_visible('#empty-state'))
+
+
+# a->c is redundant: a->b->c
+TRANSITIVE_DATA = [
+    {"module": "pkg.a", "imports": ["pkg.b", "pkg.c"]},
+    {"module": "pkg.b", "imports": ["pkg.c"]},
+    {"module": "pkg.c", "imports": []},
+]
+
+# a<->b is a cycle. a->c and b->c each look redundant via the other,
+# removing both would disconnect c: edges leaving a cycle are kept.
+CYCLE_EXIT_DATA = [
+    {"module": "pkg.a", "imports": ["pkg.b", "pkg.c"]},
+    {"module": "pkg.b", "imports": ["pkg.a", "pkg.c"]},
+    {"module": "pkg.c", "imports": []},
+]
+
+EDGE_IDS = 'cy.edges().map(e => e.id()).sort()'
+
+
+class TestTransitiveReduction(BrowserTestCase):
+    def test_on_by_default(self):
+        self.open_graph(TRANSITIVE_DATA)
+        self.assertEqual(self.errors, [])
+        self.assertTrue(self.page.is_checked('#reduce-edges'))
+        self.assertEqual(self.page.evaluate(EDGE_IDS), ['pkg.a->pkg.b', 'pkg.b->pkg.c'])
+
+    def test_toggle_off_shows_all_edges(self):
+        self.open_graph(TRANSITIVE_DATA)
+        self.page.uncheck('#reduce-edges')
+        self.assertEqual(self.errors, [])
+        self.assertEqual(self.page.evaluate(EDGE_IDS), ['pkg.a->pkg.b', 'pkg.a->pkg.c', 'pkg.b->pkg.c'])
+
+    def test_cycle_exit_edges_kept(self):
+        self.open_graph(CYCLE_EXIT_DATA)
+        self.assertEqual(self.errors, [])
+        expected = ['pkg.a->pkg.b', 'pkg.a->pkg.c', 'pkg.b->pkg.a', 'pkg.b->pkg.c']
+        self.assertEqual(self.page.evaluate(EDGE_IDS), expected)
+
+    def test_focus_shows_direct_imports(self):
+        self.open_graph(TRANSITIVE_DATA)
+        self.page.evaluate('applyFocus("pkg.a")')
+        self.page.wait_for_timeout(500)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(self.page.evaluate(EDGE_IDS), ['pkg.a->pkg.b', 'pkg.a->pkg.c', 'pkg.b->pkg.c'])
+
+    def test_removed_middle_node_restores_edge(self):
+        # a->c was hidden because of a->b->c; without b it must be shown
+        self.open_graph(TRANSITIVE_DATA)
+        self.page.evaluate('removeNode("pkg.b")')
+        self.page.wait_for_timeout(500)
+        self.assertEqual(self.errors, [])
+        self.assertEqual(self.page.evaluate(EDGE_IDS), ['pkg.a->pkg.c'])

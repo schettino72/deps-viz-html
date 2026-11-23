@@ -18,6 +18,14 @@
         }
         #graph { flex: 1; overflow: hidden; }
         h3 { margin-bottom: 10px; color: #333; font-size: 14px; }
+        .option-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin: -6px 0 10px;
+            font-size: 13px;
+            cursor: pointer;
+        }
         #search, #layout-select {
             width: 100%;
             padding: 8px;
@@ -142,6 +150,9 @@
                     <option value="dagre-tb">Hierarchical (TB)</option>
                     <option value="cose">Force-directed</option>
                 </select>
+                <label class="option-row" title="Hide import a->c when a already reaches c through other modules">
+                    <input type="checkbox" id="reduce-edges" checked> Hide transitive edges
+                </label>
             </div>
             <h3>Search</h3>
             <input type="text" id="search" placeholder="Filter modules...">
@@ -204,8 +215,8 @@
     // import_deps JSON: [{module, imports: [module, ...]}, ...]
     const results = [{"module": "foo.__init__", "imports": []}, {"module": "foo.foo_a", "imports": ["foo.foo_b", "foo.foo_c"]}, {"module": "foo.foo_b", "imports": []}, {"module": "foo.foo_c", "imports": ["foo.__init__"]}, {"module": "foo.foo_d", "imports": ["foo.foo_c"]}, {"module": "foo.sub.__init__", "imports": []}, {"module": "foo.sub.sub_a", "imports": ["foo.foo_d"]}];
 
-    // Edges on a cycle: both ends in the same strongly connected component (Tarjan)
-    function findCycleEdges(links) {
+    // Strongly connected components (Tarjan): Map nodeId -> component root id
+    function findComponents(links) {
         const adjacency = new Map();
         links.forEach(l => {
             if (!adjacency.has(l.source)) adjacency.set(l.source, []);
@@ -247,9 +258,53 @@
             if (!index.has(nodeId)) visit(nodeId);
         });
 
+        return component;
+    }
+
+    // Edges on a cycle: both ends in the same strongly connected component
+    function findCycleEdges(links) {
+        const component = findComponents(links);
         return links
-            .filter(l => component.has(l.source) && component.get(l.source) === component.get(l.target))
+            .filter(l => component.get(l.source) === component.get(l.target))
             .map(l => [l.source, l.target]);
+    }
+
+    // Transitive reduction: drop a->c when c is also reachable through another path.
+    // Done on the DAG of components, so reachability is never lost with cycles:
+    // edges inside a cycle are kept, and all edges between two components are kept
+    // unless the component edge itself is redundant.
+    function reduceLinks(links) {
+        const component = findComponents(links);
+        const successors = new Map();
+        links.forEach(l => {
+            const from = component.get(l.source);
+            const to = component.get(l.target);
+            if (from === to) return;
+            if (!successors.has(from)) successors.set(from, new Set());
+            successors.get(from).add(to);
+        });
+
+        const reachCache = new Map();
+        function reachable(comp) {
+            if (reachCache.has(comp)) return reachCache.get(comp);
+            const result = new Set();
+            reachCache.set(comp, result);
+            (successors.get(comp) || []).forEach(next => {
+                result.add(next);
+                reachable(next).forEach(other => result.add(other));
+            });
+            return result;
+        }
+
+        function isRedundant(from, to) {
+            return [...(successors.get(from) || [])].some(mid => mid !== to && reachable(mid).has(to));
+        }
+
+        return links.filter(l => {
+            const from = component.get(l.source);
+            const to = component.get(l.target);
+            return from === to || !isRedundant(from, to);
+        });
     }
 
     function buildGraph(results) {
@@ -397,8 +452,8 @@
         return nodeId;
     }
 
-    // Build Cytoscape elements
-    function buildElements(nodeFilter) {
+    // Build Cytoscape elements. allEdges: ignore "hide transitive edges" (used by focus)
+    function buildElements(nodeFilter, allEdges) {
         const visibleNodeIds = nodeFilter ? nodeFilter : new Set(data.nodes.map(n => n.id));
 
         const nodes = [];
@@ -433,10 +488,11 @@
 
         // Build edges with deduplication for collapsed packages
         const edgeMap = new Map();
-        data.links.forEach(l => {
-            if (!visibleNodeIds.has(l.source) || !visibleNodeIds.has(l.target)) return;
-            if (removedNodeIds.has(l.source) || removedNodeIds.has(l.target)) return;
-
+        const isVisible = id => visibleNodeIds.has(id) && !removedNodeIds.has(id);
+        const visibleLinks = data.links.filter(l => isVisible(l.source) && isVisible(l.target));
+        const reduce = !allEdges && document.getElementById('reduce-edges').checked;
+        // reduce only visible links: a hidden middle node must not hide a->c
+        (reduce ? reduceLinks(visibleLinks) : visibleLinks).forEach(l => {
             const source = mapToCollapsed(l.source);
             const target = mapToCollapsed(l.target);
 
@@ -693,7 +749,7 @@
         focusedNodeId = nodeId;
         const { connected } = getConnections(nodeId);
 
-        const elements = buildElements(connected);
+        const elements = buildElements(connected, true);
         cy.json({ elements });
         setVisualSelection(nodeId);
         runLayout(document.getElementById('layout-select').value, nodeId);
@@ -846,6 +902,7 @@
     });
 
     document.getElementById('search').addEventListener('input', updateVisibility);
+    document.getElementById('reduce-edges').addEventListener('change', updateVisibility);
 
     function updateVisibility() {
         const searchTerm = document.getElementById('search').value.toLowerCase();
